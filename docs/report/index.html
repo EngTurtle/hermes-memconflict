@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A detailed comparison of seven memory providers for Hermes, tested on 30 personas and 3,750 questions about changing, contradictory, and condition-bound memories.">
   <title>Hermes memory provider benchmark</title>
-  <link rel="stylesheet" href="assets/styles.css?v=20260807-1">
+  <link rel="stylesheet" href="assets/styles.css?v=20260807-2">
   <script src="assets/data.js?v=20260806-8" defer></script>
   <script src="assets/chart.umd.min.js?v=20260806-1" defer></script>
-  <script src="assets/app.js?v=20260806-8" defer></script>
+  <script src="assets/app.js?v=20260807-1" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to report</a>
@@ -46,8 +46,8 @@
   <main id="main">
     <section class="hero" id="top" aria-labelledby="report-title">
       <div class="hero-kicker">Completed August 2026</div>
-      <h1 id="report-title">How seven Hermes memory providers handled conflicting facts</h1>
-      <p class="hero-deck">A memory provider is the component Hermes asks to store conversation history and return relevant context before it answers. Each provider received the same 71,060 dialogue turns and the same 3,750 questions. Honcho produced the best answers, mem0 handled condition-bound preferences best, and none dealt reliably with planted false memories.</p>
+      <h1 id="report-title">Seven Hermes memory providers, one question: which one should you deploy?</h1>
+      <p class="hero-deck">A memory provider stores conversation history and returns relevant context before the assistant answers. Each provider received the same 71,060 dialogue turns and the same 3,750 questions about changing facts, planted contradictions, and conditional preferences. Honcho reconstructed personal histories best, mem0 retained condition-bound preferences best, and none reliably rejected planted false memories.</p>
       <div class="hero-stats" aria-label="Benchmark scale">
         <div><strong>30</strong><span>simulated users</span></div>
         <div><strong>1,579</strong><span>sessions</span></div>
@@ -60,55 +60,55 @@
     <aside class="early-guide" aria-label="Definitions, scoring, and scope needed to read the findings">
       <div><strong>Three kinds of conflict</strong><p><b>Dynamic:</b> a fact genuinely changes, such as Darwin → Melbourne. <b>Static:</b> a later planted false claim must be rejected. <b>Conditional:</b> a preference applies only in a stated situation, such as audiobooks while commuting.</p></div>
       <div><strong>A signed answer score</strong><p>Correct earns +1, partial +0.5, blank or uncertain 0, and wrong −1. The <b>macro answer score</b> averages the dynamic, static, and conditional scores equally. Its range is −1 to +1; higher is better.</p></div>
-      <div><strong>One controlled local setup each</strong><p>Every provider received the same histories and questions and used the same answer model and judge. Only self-hosted configurations were tested. Local clocks were moved through the histories’ 2022–2026 dates so provider time rules stayed meaningful.</p></div>
+      <div><strong>One controlled local setup each</strong><p>Every provider received the same histories and questions and used the same answer model and judge. Only self-hosted configurations were tested. Local clocks were moved through the histories' 2022–2026 dates so provider time rules stayed meaningful.</p></div>
       <div><strong>Not a production-readiness test</strong><p>The benchmark measures answers under memory conflict. It does not test security, access control, durability, vendor support, document retrieval, or multi-user isolation. Treat it as product-choice evidence, not certification.</p></div>
     </aside>
 
     <section class="section verdict" id="verdict" aria-labelledby="verdict-title">
       <div class="section-heading">
         <p class="eyebrow">Deployment reading</p>
-        <h2 id="verdict-title">Choose by priority: overall answers, conditional preferences, or changing facts.</h2>
-        <p>Honcho’s 0.085 macro-score lead over mem0 is larger than the measured judge-noise band. mem0 combined the second-best overall score with the strongest conditional result. Hindsight had the second-best dynamic score with a much smaller model-token workload than Honcho.</p>
+        <h2 id="verdict-title">Choose by what your assistant must get right: life histories, preferences, or evolving facts.</h2>
+        <p>Honcho was the best at reconstructing complicated personal histories: career timelines, relocations, and relationship changes. mem0 was strongest at retaining condition-bound preferences such as "audiobooks while commuting." They fail in opposite directions: Honcho's broad narrative summary covers history questions but can drop single-mention facts entirely, while mem0's per-query search finds narrow preferences but loses track when many similar facts compete for the same retrieval slots. Hindsight was the second-best changing-fact provider at a much lower model-token workload than Honcho. The 0.085 macro-score gap between Honcho and mem0 exceeds the measured judge-noise band.</p>
       </div>
 
       <aside class="top-safety" aria-label="Shared false-memory safety failure">
         <div><p class="card-label">Shared safety failure</p><h3>No provider reliably rejected planted false memories.</h3></div>
-        <p>Static questions ask the assistant to preserve a stable fact after a later statement deliberately contradicts it. Even Honcho—the overall winner—answered only 36.4% of these questions fully correctly and asserted the false fact 25.8% of the time.</p>
+        <p>Static questions plant a false claim after an established fact. Even Honcho answered only 36.4% fully correctly and asserted the false fact 25.8% of the time. Some of those "wrong" answers were reasonable inferences (reconciling two schools as undergraduate and graduate study), but the overall pattern remains: every provider sometimes repeats a planted falsehood as though it were true.</p>
       </aside>
 
       <figure class="chart-card chart-card-wide cost-score-card early-cost-score" aria-labelledby="cost-score-title cost-score-caption">
         <div class="chart-heading"><h3 id="cost-score-title">Answer score versus weighted model-token workload</h3></div>
         <div id="cost-score-chart" class="svg-chart"></div>
-        <figcaption id="cost-score-caption">The better region is upper left: higher answer score with less weighted work. Weighted units per dialogue turn = 0.1 × cached input + 1 × uncached input + 5 × generated output. This compares token classes without assuming a currency or model price. Select a provider in the legend to show or hide it.</figcaption>
+        <figcaption id="cost-score-caption">The better region is upper left: higher answer score with fewer tokens* per turn. *tokens = 0.1 × cached input + 1 × uncached input + 5 × generated output. This weights token classes without assuming a currency or model price. Select a provider in the legend to show or hide it.</figcaption>
       </figure>
 
       <div class="recommendation-grid">
         <article class="recommendation recommendation-primary">
-          <p class="card-label">Highest overall score</p>
+          <p class="card-label">Best for personal histories</p>
           <h3>Honcho</h3>
           <p class="recommendation-number">0.477 <span>macro answer score · −1 to +1</span></p>
-          <p class="recommendation-secondary">Dynamic score: 0.643</p>
-          <p><strong>Strength:</strong> the best overall and changing-fact results. <strong>Limitation:</strong> a much larger prompt, the highest model-token workload, and more components to monitor.</p>
+          <p class="recommendation-secondary">Dynamic score: 0.643 · SEH@3: 0.808</p>
+          <p><strong>Choose when:</strong> the assistant must track relocations, career changes, and relationship history across many sessions. Honcho most often exposed all relevant accounts of a fact and produced the highest evidence-retrieval rate. <strong>Risk:</strong> its rich derived context (profiles, peer cards, a model-generated Dialectic response) can contradict itself. In one case an incorrect representation said a drink was preferred when childcare was <em>limited</em>, while another section said <em>available</em>; the answer model followed the wrong one. A separate risk: facts that the summarization pipeline does not capture are invisible. In one persona, the Dialectic answered "I don't have any information about your preference for Popular Science," though the preference had been stated in conversation and mem0's vector search ranked it first. At roughly 25,000 tokens per question it also had the highest workload and the most components to monitor.</p>
           <p class="recommendation-config"><strong>Tested:</strong> Honcho 3.0.9 with SDK 2.2.0, bounded hybrid context, and Dream consolidation triggered after every session.</p>
         </article>
         <article class="recommendation">
-          <p class="card-label">Lower-complexity pick</p>
+          <p class="card-label">Best for preferences</p>
           <h3>mem0</h3>
           <p class="recommendation-number">0.392 <span>macro answer score · −1 to +1</span></p>
-          <p class="recommendation-secondary">Conditional score: 0.836</p>
-          <p><strong>Strength:</strong> the strongest condition-bound memory and a conventional SDK plus vector-database stack. <strong>Limitation:</strong> new facts are added without replacing older ones, and 20.6% of dynamic answers were wrong.</p>
+          <p class="recommendation-secondary">Conditional score: 0.836 · 0.9% conditional wrong</p>
+          <p><strong>Choose when:</strong> condition-bound preferences matter most and a conventional SDK-plus-vector-database stack is the goal. mem0 answered 84.5% of conditional questions correctly and asserted a wrong conditional fact only 0.9% of the time. Its per-query vector search can find single-mention preferences that summarization-based providers drop entirely. <strong>Risk:</strong> version 2.0.14 is ADD-only. It extracts new facts but does not replace or delete older ones, so old and new values compete during retrieval. That produced the highest dynamic wrong-answer rate (20.6%): stale facts are not retired, and the answer model sometimes picks the wrong one.</p>
           <p class="recommendation-config"><strong>Tested:</strong> mem0ai 2.0.14 with Qdrant 1.18.3. This release extracts new facts but does not run the older update/delete reconciliation pass.</p>
         </article>
         <article class="recommendation">
           <p class="card-label">Changing-fact alternative</p>
           <h3>Hindsight</h3>
           <p class="recommendation-number">0.281 <span>macro answer score · −1 to +1</span></p>
-          <p class="recommendation-secondary">Dynamic score: 0.455</p>
-          <p><strong>Strength:</strong> second-best changing-fact score with lower model-token workload than Honcho. <strong>Limitation:</strong> weak conditional memory, a heavier service stack, and a median of roughly 126 returned memories per question.</p>
+          <p class="recommendation-secondary">Dynamic score: 0.455 · 16.0% dynamic wrong</p>
+          <p><strong>Choose when:</strong> changing facts are the priority but Honcho's workload and component count are too high. Hindsight's dynamic score was second only to Honcho. <strong>Risk:</strong> a median of roughly 126 returned memories per question gave broad coverage but sometimes buried the needed fact at rank 57 or beyond. Conditional memory was weak: audiobook preferences, for example, appeared nowhere in the top results. The all-types recall tested here differs from the Hermes observations-only default, which scored 0.218.</p>
           <p class="recommendation-config"><strong>Tested:</strong> Hindsight 0.8.6 with embedded PostgreSQL, all three memory types, and the full 4,096-token recall budget.</p>
         </article>
       </div>
-      <p class="recommendation-scope">“Lower-complexity” refers to the tested integration: mem0 used a Python SDK, Qdrant, and the shared model endpoints. It is not a weighted composite score. Production reliability, security, access control, and vendor support were not tested.</p>
+      <p class="recommendation-scope">"Best for preferences" refers to the conditional-memory score and a simpler integration stack, not a weighted composite. Production reliability, security, access control, and vendor support were not tested.</p>
 
       <div class="noise-note">
         <strong>No stable third-place ranking</strong>
@@ -127,7 +127,7 @@
       <ol class="benchmark-flow" aria-label="Five steps in the benchmark">
         <li><span>1</span><div><strong>A simulated user talks with Hermes</strong><p>Thirty users accumulate long histories containing ordinary details, later updates, planted false claims, and situation-specific preferences.</p></div></li>
         <li><span>2</span><div><strong>The provider stores each session</strong><p>The tested Hermes integration sends the conversation to Honcho, mem0, Hindsight, or another provider. Each product decides what to extract, summarize, consolidate, or retain verbatim.</p></div></li>
-        <li><span>3</span><div><strong>Hermes asks the provider for relevant memory</strong><p>When the dataset reaches a test question, the provider returns its native context: perhaps a ranked list, a profile plus search results, a summary, or Honcho’s multi-section hybrid response.</p></div></li>
+        <li><span>3</span><div><strong>Hermes asks the provider for relevant memory</strong><p>When the dataset reaches a test question, the provider returns its native context: perhaps a ranked list, a profile plus search results, a summary, or Honcho's multi-section hybrid response.</p></div></li>
         <li><span>4</span><div><strong>The same answer model responds</strong><p>Qwen3.5-4B receives the question and that provider context. The answer model is unchanged across runs, so differences come from the memory supplied to it and how that memory was organized.</p></div></li>
         <li><span>5</span><div><strong>A separate judge grades the result</strong><p>Gemma 4 12B compares the answer with the reference answer and assigns correct, partial, blank or uncertain, or wrong. Those outcomes feed the scores used on this page.</p></div></li>
       </ol>
@@ -135,11 +135,11 @@
       <div class="provider-vocabulary" aria-labelledby="vocabulary-title">
         <div class="vocabulary-heading">
           <p class="card-label">Working vocabulary</p>
-          <h3 id="vocabulary-title">What a memory provider does between “store this” and “answer that”</h3>
+          <h3 id="vocabulary-title">What a memory provider does between "store this" and "answer that"</h3>
           <p>Providers use different names and pipelines, but these six operations cover most of the report.</p>
         </div>
         <dl class="vocabulary-grid">
-          <div><dt>Extraction</dt><dd>Turns dialogue into smaller stored claims, such as “lives in Melbourne.” Extraction can save space but can also drop a qualifier, date, or place name.</dd></div>
+          <div><dt>Extraction</dt><dd>Turns dialogue into smaller stored claims, such as "lives in Melbourne." Extraction can save space but can also drop a qualifier, date, or place name.</dd></div>
           <div><dt>Embedding and vector search</dt><dd>An embedding is a numeric representation of text. A vector database finds stored items whose representations are close to the question, even when the wording differs.</dd></div>
           <div><dt>Consolidation</dt><dd>Merges or rewrites older memories into summaries, observations, or profiles. It can resolve repetition, but a lossy summary may erase the detail later questions need.</dd></div>
           <div><dt>Recall or prefetch</dt><dd>The context automatically retrieved before Hermes answers. It may be a ranked list, a profile, several sections, or a large token-bounded bundle.</dd></div>
@@ -158,21 +158,21 @@
           <p class="definition-count">2,946 questions · 78.6%</p>
           <h3>Dynamic conflict</h3>
           <p>A fact genuinely changes. Both statements were true at different times, so the system must keep their order straight.</p>
-          <blockquote><p>“I live in Darwin.” Later: “I relocated to Melbourne.”</p></blockquote>
+          <blockquote><p>"I live in Darwin." Later: "I relocated to Melbourne."</p></blockquote>
           <p class="definition-rule"><strong>Expected answer:</strong> the user moved from Darwin to Melbourne. The older city remains part of the history but is no longer current.</p>
         </article>
         <article class="definition-card definition-static">
           <p class="definition-count">360 questions · 9.6%</p>
           <h3>Static conflict</h3>
           <p>A stable fact is followed by a deliberately false claim. Recency is the wrong rule because the newer statement should be rejected.</p>
-          <blockquote><p>“I graduated from Cal State Long Beach.” Later: “During my grad years at MIT…”</p></blockquote>
+          <blockquote><p>"I graduated from Cal State Long Beach." Later: "During my grad years at MIT…"</p></blockquote>
           <p class="definition-rule"><strong>Expected answer:</strong> Cal State is the designated truth, and MIT is a contradiction rather than a legitimate update.</p>
         </article>
         <article class="definition-card definition-conditional">
           <p class="definition-count">444 questions · 11.8%</p>
           <h3>Conditional conflict</h3>
           <p>Several preferences can all be true because each applies in a different situation. The condition must survive extraction and retrieval with the value.</p>
-          <blockquote><p>“I use audiobooks for professional study while commuting.” Elsewhere: business guides for financial planning.</p></blockquote>
+          <blockquote><p>"I use audiobooks for professional study while commuting." Elsewhere: business guides for financial planning.</p></blockquote>
           <p class="definition-rule"><strong>Expected answer:</strong> audiobooks are preferred while commuting, for professional improvement and technique study.</p>
         </article>
       </div>
@@ -180,7 +180,7 @@
       <div class="primer-columns">
         <article class="primer-panel">
           <h3>How the questions are labelled</h3>
-          <p>The 1,152 <strong>easy</strong> questions are short dynamic checks such as “Did the user’s residence change?” The 1,794 <strong>medium</strong> questions ask for the transition itself, such as “How did the residence change?” The 804 <strong>hard</strong> questions are the static and conditional cases, where the system must reject a false claim or recover a condition-value pair.</p>
+          <p>The 1,152 <strong>easy</strong> questions are short dynamic checks such as "Did the user's residence change?" The 1,794 <strong>medium</strong> questions ask for the transition itself, such as "How did the residence change?" The 804 <strong>hard</strong> questions are the static and conditional cases, where the system must reject a false claim or recover a condition-value pair.</p>
           <p>Those labels describe how the dataset was constructed. They are not confidence scores and they do not change the grading weights.</p>
         </article>
         <article class="primer-panel">
@@ -193,7 +193,7 @@
       <div class="scoring-explainer" id="scoring">
         <div class="scoring-intro">
           <h3>How an answer becomes a score</h3>
-          <p>The penalty rubric distinguishes an absent memory from a confident false statement. That distinction matters for assistants: saying “I don’t know” is inconvenient, while repeating a stale address or invented education history can cause a bad action.</p>
+          <p>The penalty rubric distinguishes an absent memory from a confident false statement. That distinction matters for assistants: saying "I don't know" is inconvenient, while repeating a stale address or invented education history can cause a bad action.</p>
         </div>
         <div class="outcome-definitions" aria-label="Answer outcome definitions">
           <div class="outcome-definition outcome-correct"><strong>Correct · +1</strong><span>The answer supplies the required fact.</span></div>
@@ -212,7 +212,7 @@
           </div>
           <div>
             <h4>Why the report uses answer outcomes</h4>
-            <p>The comparison focuses on Hermes’ final answer. Correct, partial, blank, and wrong retain their meaning even when providers return different kinds and amounts of context.</p>
+            <p>The comparison focuses on Hermes' final answer. Correct, partial, blank, and wrong retain their meaning even when providers return different kinds and amounts of context.</p>
           </div>
           <div>
             <h4>Why retrieval-hit metrics are not ranked here</h4>
@@ -227,16 +227,16 @@
       <div class="section-heading split-heading">
         <div>
           <p class="eyebrow">Answer outcomes</p>
-          <h2 id="results-title">Static contradictions were the common safety failure.</h2>
+          <h2 id="results-title">Wrong answers and missing answers are different kinds of failure, and providers make different kinds.</h2>
         </div>
-        <p>Every provider struggled when a newer statement was deliberately false. Even Honcho answered only 36.4% of static questions fully correctly and asserted a wrong static fact 25.8% of the time.</p>
+        <p>A low wrong-answer rate can come from cautious abstention or from genuinely good retrieval. A high wrong-answer rate can come from stale facts competing with new ones, or from rich context that the answer model misreads. The outcome breakdown reveals which providers fail safely (blank) and which fail dangerously (wrong).</p>
       </div>
       <p class="chart-interaction-note">Chart legends are controls: select a legend label to hide or show that series. Hover or tap a mark for its exact value.</p>
 
       <figure class="chart-card chart-card-wide" aria-labelledby="outcomes-title outcomes-caption">
         <div class="chart-heading"><h3 id="outcomes-title">Overall answer outcomes across all 3,750 questions</h3></div>
         <div id="outcome-chart" class="outcome-chart"></div>
-        <figcaption id="outcomes-caption">Honcho paired the largest fully correct share (60.0%) with a 7.3% wrong-answer share. Mnemosyne and OpenViking look safer on wrong-answer rate largely because they left 50.1% and 67.1% of answers blank.</figcaption>
+        <figcaption id="outcomes-caption">Honcho paired the largest correct share (60.0%) with a 7.3% wrong rate. Mnemosyne (3.2% dynamic wrong) and OpenViking (7.7% dynamic wrong) look safer on wrong-answer rate because they left 50.1% and 67.1% of answers blank, not because they resolved conflicts better.</figcaption>
       </figure>
 
       <figure class="chart-card chart-card-wide" aria-labelledby="conflict-outcomes-title conflict-outcomes-caption">
@@ -254,7 +254,7 @@
           </label>
         </div>
         <div id="conflict-outcome-chart" class="outcome-chart"></div>
-        <figcaption id="conflict-outcomes-caption">Use the selector to change question type and click a legend item to hide an outcome. Static errors are committed falsehoods; low wrong rates on conditional questions usually mean the provider abstained because the condition-bound memory was not found.</figcaption>
+        <figcaption id="conflict-outcomes-caption">Use the selector to change question type and click a legend item to hide an outcome. <strong>Dynamic:</strong> mem0's 20.6% wrong rate is the highest because old and new facts coexist. Honcho's 5.6% is the lowest among providers that also answer frequently. <strong>Static:</strong> Mnemosyne asserts a false fact 37.2% of the time, the highest rate. <strong>Conditional:</strong> low wrong rates across all providers; the differentiator is whether the condition-bound fact was retrieved at all.</figcaption>
       </figure>
 
       <figure class="chart-card chart-card-wide" aria-labelledby="scatter-title scatter-caption">
@@ -266,7 +266,7 @@
       <figure class="chart-card chart-card-wide" aria-labelledby="conflict-title conflict-caption">
         <div class="chart-heading"><h3 id="conflict-title">Penalty score by conflict type</h3></div>
         <div id="conflict-chart" class="conflict-chart"></div>
-        <figcaption id="conflict-caption">This chart applies +1 / +0.5 / 0 / −1 within each type. A negative value means wrong assertions outweighed correct and partial answers; Mnemosyne’s −0.204 static score is the only negative category score in the featured comparison.</figcaption>
+        <figcaption id="conflict-caption">This chart applies +1 / +0.5 / 0 / −1 within each type. A negative value means wrong assertions outweighed correct and partial answers; Mnemosyne's −0.204 static score is the only negative category score in the featured comparison.</figcaption>
       </figure>
 
       <details class="data-details">
@@ -282,10 +282,10 @@
     <section class="section depth-section" id="depth" aria-labelledby="depth-title">
       <div class="section-heading split-heading">
         <div>
-          <p class="eyebrow">Position in the user history</p>
-          <h2 id="depth-title">Wrong-answer rates rose in later sessions for every featured provider.</h2>
+          <p class="eyebrow">How providers degrade over time</p>
+          <h2 id="depth-title">Every provider made more wrong answers as user histories grew longer.</h2>
         </div>
-        <p>Each point pools questions asked at the same five-session depth across all 30 users. It is not a calendar interval or an equal stored-item count: providers extracted and consolidated different amounts of memory, and the number of questions changes by bin.</p>
+        <p>For a long-running personal assistant, this is the most direct deployment question: does the memory system get worse as more conversations accumulate? Each point below pools questions asked at the same five-session depth across all 30 users. The number of questions changes by bin.</p>
       </div>
       <p class="history-reading-note"><strong>What the lines show:</strong> correct and wrong shares only; partial and blank outcomes are omitted. The headline comparison uses sessions 6–10 (N=300) and 46–50 (N=438) because the edge bins 1–5 (N=40) and 51–55 (N=188) are much smaller. All eleven bins remain visible.</p>
       <div id="session-charts" class="session-grid"></div>
@@ -299,29 +299,47 @@
 
     <section class="section" id="failures" aria-labelledby="failures-title">
       <div class="section-heading">
-        <p class="eyebrow">Three questions traced through retrieval</p>
-        <h2 id="failures-title">The same wrong score can come from a missing fact, a lossy summary, or an invented reconciliation.</h2>
-        <p>The examples below come from one persona’s featured runs. They explain why aggregate retrieval and answer metrics do not always move together.</p>
+        <p class="eyebrow">What the failures look like in practice</p>
+        <h2 id="failures-title">Some failures are the provider's; some are the benchmark's.</h2>
+        <p>Each example below is a real question from the benchmark. They show the different ways providers fail: dropping a detail during storage, summarizing away a place name, assembling context that contradicts itself, or surfacing so many memories that the needed one gets buried.</p>
       </div>
 
       <div class="case-grid">
         <article class="case-card">
           <p class="case-type">Dynamic · Darwin → Melbourne</p>
           <h3>A distractor became the origin</h3>
-          <p>Supermemory retrieved the Melbourne destination and a Los Angeles upbringing, but not Darwin. It answered Los Angeles → Melbourne. RetainDB retained Darwin and the fact that a move occurred, but extraction reduced Melbourne to “a new city,” so the destination could not be named.</p>
-          <p class="case-mechanism">Different failures: missing origin evidence versus a destination stripped of its name.</p>
+          <p>The user moved from Darwin to Melbourne. When asked where they moved from, Supermemory's stored memories included Melbourne and a Los Angeles upbringing but not Darwin. The assistant guessed Los Angeles. RetainDB remembered that a move happened, but its summary replaced "Melbourne" with "a new city," so the assistant could not name the destination.</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> if a provider replaces a place name with a generic phrase during storage, the assistant will either say nothing or guess from whatever other location it finds.</p>
         </article>
         <article class="case-card">
           <p class="case-type">Static · Cal State vs MIT</p>
-          <h3>The contradiction became a biography</h3>
-          <p>Honcho supplied both Cal State Long Beach and the planted MIT claim. The answer model reconciled them as undergraduate and graduate study instead of identifying memory pollution. mem0 and Hindsight retrieved Cal State but not the competing MIT claim, so they could state the designated fact without recognizing the conflict.</p>
-          <p class="case-mechanism">A supporting truth in retrieval is not enough when the task also requires the false competitor.</p>
+          <h3>The contradiction became a plausible biography</h3>
+          <p>The user graduated from Cal State Long Beach. A later conversation casually mentioned "my grad years at MIT." When asked about education, Honcho presented both schools, and the assistant combined them into a plausible biography: Cal State for undergrad, MIT for graduate school. A human reader would likely make the same connection. The benchmark counts it as wrong because the MIT mention was planted as a false claim. mem0 and Hindsight stored Cal State but not the MIT mention, so they gave the correct answer without ever facing the conflict.</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> some answers the benchmark penalizes are sensible inferences from the conversation. This also shows a real risk with Honcho: richer context gives the assistant more material to rationalize with, so it is more likely to produce a confident wrong answer than to abstain.</p>
+        </article>
+        <article class="case-card">
+          <p class="case-type">Conditional · iced Americano preference</p>
+          <h3>Derived context contradicted itself</h3>
+          <p>The user prefers iced Americanos "when needing a caffeine boost and childcare help is available." mem0, Hindsight, RetainDB, and Supermemory all stored that fact intact and the assistant answered correctly. Honcho built two separate profile summaries of the user, and they disagreed: one said the drink is preferred when childcare is <em>limited</em>, the other said childcare help is <em>available</em>. The assistant followed the wrong summary.</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> Honcho's summaries improve coverage, but they can invert a detail. A small assistant model may not catch the contradiction between two sections of its own context.</p>
+        </article>
+        <article class="case-card">
+          <p class="case-type">Static · mother's birth year</p>
+          <h3>The benchmark rewarded the questionable answer</h3>
+          <p>Early conversations say the user's mother was born on 1936-09-18. Later sessions describe passport and medical records placing the birth year around 1990 and call 1936 a clerical error on a church form. Honcho recovered both dates and the official correction. Mnemosyne's summary also identified 1936 as a clerical error. But the benchmark designates 1936 as the correct answer, so mem0 received full credit for selecting it, alongside a self-contradictory stored fact that read "1936 was a typo since the actual birth year is 1936."</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> the providers that reconstructed the facts most carefully scored worse than ones that happened to keep the older value. Some penalized answers are better personal-agent behavior than the officially correct ones.</p>
+        </article>
+        <article class="case-card">
+          <p class="case-type">Dynamic · "has a father"</p>
+          <h3>No provider resolved the ambiguity</h3>
+          <p>Earlier sessions describe a living father in Rome, a structural engineer and emergency contact. A later statement says "I don't have a father." Hindsight and RetainDB happened to return only the older sessions, so the assistant said yes and the benchmark counted that as correct. mem0 and Supermemory returned the newer statement, the assistant said no, and the benchmark counted that as wrong. Honcho exposed both accounts and interpreted the newer statement as a relationship change, though it stated the interpretation as fact rather than flagging the inconsistency.</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> the best assistant response would present both accounts and note the inconsistency. No provider did this. Providers that happened not to return the conflicting statement got credit by luck, not by resolving the conflict.</p>
         </article>
         <article class="case-card">
           <p class="case-type">Conditional · audiobooks while commuting</p>
           <h3>The preference survived without its condition</h3>
-          <p>mem0 and Supermemory preserved the audiobook/commute pair. Hindsight returned a large list but no audiobook preference. Honcho found professional-development listening while omitting “while commuting” and adding unsupported qualifications.</p>
-          <p class="case-mechanism">Conditional memory fails when extraction or retrieval separates the value from the situation that makes it applicable.</p>
+          <p>The user listens to audiobooks for professional study while commuting. When asked about this preference, mem0 and Supermemory stored the audiobook-and-commuting pair intact and the assistant answered correctly. Hindsight returned roughly 123 stored items but the audiobook preference was not among them; the closest match, a commute-related fact, appeared at position 57. Honcho found audiobook facts about professional development but its summary dropped "while commuting" and its internal search added unsupported qualifications.</p>
+          <p class="case-mechanism"><strong>For a deployment:</strong> a condition-bound preference fails when the provider separates the preference from the situation it applies to, or when it never stores the preference as a distinct fact. Returning many memories does not help if the needed one is not among them.</p>
         </article>
       </div>
     </section>
@@ -330,14 +348,10 @@
       <div class="section-heading split-heading">
         <div>
           <p class="eyebrow">Provider-by-provider notes</p>
-          <h2 id="providers-title">Some providers required benchmark-specific fixes before a full run was usable.</h2>
+          <h2 id="providers-title">Each provider had distinct operational characteristics that would carry into a production deployment.</h2>
         </div>
-        <p>The benchmark advanced provider time through simulated years and isolated each user in a clean service, which a normal installation would not do. Product behavior still mattered: some systems kept old and new facts together, returned no useful memory, or lost details while summarizing.</p>
+        <p>The benchmark advanced provider time through simulated years and isolated each user in a clean service, which a normal installation would not do. Some operational findings are benchmark-specific, but several are production-relevant: mem0's ADD-only extraction, Honcho's self-contradicting derived context, Hindsight's near-duplicate recall, Supermemory's pinned old release, and Mnemosyne's lossy consolidation summaries.</p>
       </div>
-      <aside class="timeout-note">
-        <h3>A timeout was not always safe to replay</h3>
-        <p>Three integrations exposed different ambiguous states. Hindsight could finish a retain on the server after its client had already timed out. OpenViking let some read timeouts end the whole persona, with no mid-persona resume. Supermemory could accept a document and then die while the client waited for ingestion; submitting it again risked a duplicate. The harness retried only when it could prove the operation had not changed memory, and otherwise discarded and reran the persona. The other four providers had operational faults, but this specific timeout-safety problem was not verified in their final waves.</p>
-      </aside>
       <div id="provider-cards" class="provider-grid"></div>
     </section>
 
@@ -347,7 +361,7 @@
           <p class="eyebrow">Inference workload</p>
           <h2 id="cost-title">Measured model-token workload per dialogue turn</h2>
         </div>
-        <p>Cached input, uncached input, and generated output are shown separately because hosted APIs price them differently. These totals cover the provider’s generation work and final answers; they are not a provider subscription price or a forecast for a particular model host.</p>
+        <p>Cached input, uncached input, and generated output are shown separately because hosted APIs price them differently. These totals cover the provider's generation work and final answers; they are not a provider subscription price or a forecast for a particular model host.</p>
       </div>
       <div id="cost-chart" class="cost-chart"></div>
       <p class="chart-footnote">The horizontal axis is logarithmic so Mnemosyne and Honcho fit on the same chart. Restart inflation affects the workload window, not the banked answer scores.</p>
@@ -368,7 +382,7 @@
         </div>
         <div>
           <h3>Recall through the tested surface</h3>
-          <p>The harness tested the Hermes plugins’ automatic path: conversations were ingested without the agent explicitly choosing what to remember, and provider context was injected automatically before each answer. That produced different context widths by design: a short ranked list for some providers, a profile plus search for others, and multi-section hybrid context for Honcho.</p>
+          <p>The harness tested the Hermes plugins' automatic path: conversations were ingested without the agent explicitly choosing what to remember, and provider context was injected automatically before each answer. That produced different context widths by design: a short ranked list for some providers, a profile plus search for others, and multi-section hybrid context for Honcho.</p>
         </div>
         <div>
           <h3>Use one answer model</h3>
@@ -388,8 +402,8 @@
         </div>
         <div>
           <h4>The conversations run on a simulated calendar</h4>
-          <p>The histories span 2022 through January 2026. Several products consult the current clock when they date a memory, retire it, consolidate it, interpret “recently,” or rank it. If the service stayed on the real 2026 clock while answering a question set in 2022, it could treat a brand-new memory as four years old.</p>
-          <p>The harness used <code>libfaketime</code> to move each relevant local process—and, where needed, its database—to the session date. This kept the product's own expiry, recency, and scheduling rules intact. A managed service's clock cannot be controlled this way, so hosted editions were outside the comparison.</p>
+          <p>The histories span 2022 through January 2026. Several products consult the current clock when they date a memory, retire it, consolidate it, interpret "recently," or rank it. If the service stayed on the real 2026 clock while answering a question set in 2022, it could treat a brand-new memory as four years old.</p>
+          <p>The harness used <code>libfaketime</code> to move each relevant local process (and, where needed, its database) to the session date. This kept the product's own expiry, recency, and scheduling rules intact. A managed service's clock cannot be controlled this way, so hosted editions were outside the comparison.</p>
           <p class="scope-config-note"><strong>One row per provider:</strong> the comparison uses Hindsight with observations, world facts, and experiences all available to recall. An earlier observations-only run, matching the Hermes default filter, was useful during configuration work but is excluded from every ranking, graph, and table here.</p>
         </div>
       </aside>
@@ -397,7 +411,7 @@
       <div class="timeline" aria-label="Events that changed the benchmark interpretation">
         <div><time datetime="2026-07-19">Jul 19</time><p>The shared harness started with self-hostable providers and the MemConflict histories.</p></div>
         <div><time datetime="2026-07-30">Jul 30</time><p>Clock normalization and penalty scoring separated stale assertions from abstentions.</p></div>
-        <div><time datetime="2026-08-01">Aug 1</time><p>Smoke runs found mem0’s embedding mismatch, Supermemory’s clock-replay memory blow-up, and Honcho context overflow. Final configurations corrected the dimensions, respawned Supermemory per session, and bounded Honcho’s context.</p></div>
+        <div><time datetime="2026-08-01">Aug 1</time><p>Smoke runs found mem0's embedding mismatch, Supermemory's clock-replay memory blow-up, and Honcho context overflow. Final configurations corrected the dimensions, respawned Supermemory per session, and bounded Honcho's context.</p></div>
         <div><time datetime="2026-08-05">Aug 5</time><p>Seven self-hosted products completed the final penalty-judged comparison.</p></div>
       </div>
 
@@ -406,9 +420,9 @@
         <ul>
           <li>Macro-score differences below roughly 0.02–0.03 are inside measured judge sampling noise.</li>
           <li>The original MemConflict benchmark did not separate confident wrong answers from blank or uncertain answers in its headline answer accuracy. This report adds a penalty rubric: wrong is −1, blank or uncertain is 0, partial is +0.5, and correct is +1.</li>
-          <li>Original MemConflict retrieval-hit metrics remain in the private artifacts but are not used for provider ranking here. The answer model received incompatible context surfaces, including Honcho’s long sections, Hindsight’s wide lists, and Supermemory’s separate profile block.</li>
+          <li>Original MemConflict retrieval-hit metrics remain in the private artifacts but are not used for provider ranking here. The answer model received incompatible context surfaces, including Honcho's long sections, Hindsight's wide lists, and Supermemory's separate profile block.</li>
           <li>RetainDB server is a best-effort deployable arm with documented harness patches and a vendor-exposed promotion field that the pinned Hermes plugin does not send.</li>
-          <li>Mnemosyne’s arm used no language model during extraction, Honcho was forced to Dream after every session, and several token windows include failed attempts. Workload comparisons therefore need the provider notes beside them.</li>
+          <li>Mnemosyne's arm used no language model during extraction, Honcho was forced to Dream after every session, and several token windows include failed attempts. Workload comparisons therefore need the provider notes beside them.</li>
           <li>Only automatic memory ingestion and automatic pre-answer context injection were tested. Every provider also exposes agent-callable tools for explicitly adding and retrieving memories; those tool paths are completely untested here and may produce different behavior.</li>
           <li>The benchmark tests long-lived personal memory under updates, false contradictions, and conditional preferences. It does not measure access control, durability, production support, document retrieval, or multi-user isolation.</li>
         </ul>
@@ -430,33 +444,33 @@
     <section class="section decision-section" id="decision" aria-labelledby="decision-title">
       <div class="section-heading split-heading">
         <div>
-          <p class="eyebrow">Closing decision guide</p>
-          <h2 id="decision-title">Use the scores to form a shortlist—not to skip production evaluation.</h2>
+          <p class="eyebrow">Choosing a provider</p>
+          <h2 id="decision-title">The right pick depends on what your assistant must handle well.</h2>
         </div>
-        <p>The numerical result belongs to the exact tested configuration. Read it beside the provider’s main failure mode, workload, version, and benchmark-specific intervention.</p>
+        <p>No provider excelled at everything. Honcho reconstructed personal histories best but consumed the most resources and sometimes poisoned its own answers with contradictory derived context. mem0 retained preferences best but left stale facts alongside new ones. Hindsight tracked changes well at lower cost but missed conditional facts. Use the table below to match your priority to a shortlist.</p>
       </div>
 
       <div class="table-wrap decision-table-wrap">
         <table class="decision-table">
           <caption>Provider-choice matrix for the tested self-hosted configurations</caption>
-          <thead><tr><th scope="col">Provider</th><th scope="col">Shortlist when</th><th scope="col">Main reason for caution</th><th scope="col">Tested configuration and workload</th></tr></thead>
+          <thead><tr><th scope="col">Provider</th><th scope="col">Best for</th><th scope="col">Main deployment risk</th><th scope="col">Tested configuration and workload</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Honcho</th><td><strong>Overall quality and changing facts matter most.</strong> It led both measures.</td><td>Highest workload, large assembled context, forced per-session Dream consolidation, and 25.8% wrong on planted static contradictions.</td><td>3.0.9 + SDK 2.2.0; bounded hybrid recall. About <strong>11,135 weighted units/turn</strong>.</td></tr>
-            <tr><th scope="row">mem0</th><td><strong>Condition-bound preferences and a conventional SDK/vector-database stack matter most.</strong></td><td>ADD-only extraction can leave old and new facts together; 20.6% of dynamic answers were wrong, reaching 22.1% wrong in sessions 46–50.</td><td>mem0ai 2.0.14 + Qdrant 1.18.3. About <strong>3,785 weighted units/turn</strong>.</td></tr>
-            <tr><th scope="row">Hindsight</th><td><strong>Changing-fact coverage is important but Honcho’s workload is too high.</strong></td><td>Weak conditional memory and very broad recall—about 126 memories per question. The chosen all-types recall differs from the Hermes observations-only default.</td><td>0.8.6 + embedded PostgreSQL/pgvector; all memory types, 4,096-token recall. About <strong>3,491 units/turn</strong>.</td></tr>
-            <tr><th scope="row">Supermemory</th><td><strong>You can validate a newer working self-hosted release yourself</strong> and conditional recall is the priority.</td><td>The scored 0.0.5 build is not current; later tested bundles could not complete ingestion. Ranked recall was empty for 904 questions.</td><td>Self-hosted 0.0.5 + profile block. About <strong>2,059 units/turn</strong>, with roughly 10–20% failed-run inflation.</td></tr>
-            <tr><th scope="row">RetainDB server</th><td><strong>You specifically need to evaluate its server architecture</strong>; the benchmark found no category where it clearly led.</td><td>A pinned revision required a patch layer and vendor promotion option; output-token use was the largest.</td><td>Server 1.0.0 at a pinned revision. About <strong>6,915 units/turn</strong>.</td></tr>
-            <tr><th scope="row">OpenViking</th><td><strong>High abstention is acceptable</strong> and you want to investigate its tree-search approach.</td><td>67.1% blank answers, ambiguous task state after some timeouts, and mixed 600/1,800-second HTTP limits in successful runs.</td><td>0.4.12 with profile + planned tree search. About <strong>2,435 units/turn</strong>, with roughly 15–20% failed-run inflation.</td></tr>
-            <tr><th scope="row">Mnemosyne</th><td><strong>Lowest measured model-token use is the overriding constraint</strong> and abstention can be tolerated.</td><td>50.1% blanks, a negative static score (−0.204), forced per-session consolidation, and no language model extracting facts on ingest.</td><td>3.14.0 with 168-hour memory lifetime. About <strong>808 units/turn</strong>; not a like-for-like extraction class.</td></tr>
+            <tr><th scope="row">Honcho</th><td><strong>Tracking life histories, career changes, and relocations.</strong> The best at exposing all relevant accounts of a fact, with the highest evidence-retrieval rate (SEH@3: 0.808).</td><td>Derived context (profiles, peer cards, Dialectic) can contradict itself, and a small answer model may follow the wrong section. The highest workload among all providers, roughly 25,000 tokens injected per question.</td><td>3.0.9 + SDK 2.2.0; bounded hybrid recall. About <strong>11,135 tokens*/turn</strong>.</td></tr>
+            <tr><th scope="row">mem0</th><td><strong>Retaining condition-bound preferences</strong> such as drink orders, audiobook habits, and situation-specific choices. 84.5% of conditional answers were correct with only 0.9% wrong.</td><td>ADD-only storage means old facts stay alongside new ones. Dynamic wrong-answer rate was 20.6%, the highest tested, rising to 22.1% in sessions 46 to 50. Extraction can also become self-contradictory (in one case: "1936 was a typo since the actual birth year is 1936").</td><td>mem0ai 2.0.14 + Qdrant 1.18.3. About <strong>3,785 tokens*/turn</strong>.</td></tr>
+            <tr><th scope="row">Hindsight</th><td><strong>Evolving facts when Honcho's complexity is impractical.</strong> Dynamic score 0.455, second only to Honcho, at roughly one third the workload.</td><td>Conditional memory was weak (28.8% correct). The median recall was about 126 memories per question: broad coverage that sometimes buried the needed fact at rank 57 or beyond. The tested all-types recall differs from the Hermes observations-only default (which scored 0.218).</td><td>0.8.6 + embedded PostgreSQL/pgvector; all memory types, 4,096-token recall. About <strong>3,491 tokens*/turn</strong>.</td></tr>
+            <tr><th scope="row">Supermemory</th><td><strong>Conditional recall (0.694) if you can validate a newer release.</strong> The scored 0.0.5 build is not current.</td><td>Later tested releases (0.0.6 and 0.0.7-rc.2) could not complete document ingestion. The dispatcher could die while HTTP stayed healthy. Ranked recall was empty for 904 of 3,750 questions.</td><td>Self-hosted 0.0.5 + profile block. About <strong>2,059 tokens*/turn</strong>, with roughly 10 to 20% failed-run inflation.</td></tr>
+            <tr><th scope="row">RetainDB server</th><td><strong>No clear category lead.</strong> Evaluate only if its server architecture is specifically needed.</td><td>Required a five-patch layer on the pinned revision. Extraction sometimes kept that a move occurred while losing the destination city. Used the most output tokens of any provider.</td><td>Server 1.0.0 at a pinned revision. About <strong>6,915 tokens*/turn</strong>.</td></tr>
+            <tr><th scope="row">OpenViking</th><td><strong>Investigating its memory-tree approach.</strong> Its low wrong-answer rate (7.0%) came primarily from abstention (67.1% blank), not from resolving conflicts well.</td><td>The model-planned search path can return nothing when the planner decides no search is needed. Stuck queue tasks and mixed HTTP timeouts left some personas in unknown state.</td><td>0.4.12 with profile + planned tree search. About <strong>2,435 tokens*/turn</strong>, with roughly 15 to 20% failed-run inflation.</td></tr>
+            <tr><th scope="row">Mnemosyne</th><td><strong>The lowest model-token workload when abstention is acceptable.</strong> No language model during extraction keeps cost well below every other provider.</td><td>Asserted the wrong static fact 37.2% of the time versus 11.4% correct: it repeated planted falsehoods more than three times as often as it gave the right answer. Forced consolidation produced lossy summaries, and 50.1% of all answers were blank.</td><td>3.14.0 with 168-hour memory lifetime. About <strong>808 tokens*/turn</strong>; not a like-for-like extraction class.</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="production-boundary">
-        <div><h3>What this benchmark can support</h3><p>A shortlist based on answer quality under changing facts, planted contradictions, conditional preferences, growing histories, and measured model-token workload.</p></div>
+        <div><h3>What this benchmark can support</h3><p>A shortlist based on how well each provider answered questions about changing facts, planted contradictions, and conditional preferences over growing histories, plus measured model-token workload.</p></div>
         <div><h3>What still needs a production trial</h3><p>Access control, durability, backup and recovery, multi-user isolation, latency, infrastructure cost, document retrieval, operational support, explicit agent-callable memory tools, and behavior on your own conversations and models.</p></div>
       </div>
-      <p class="decision-close"><strong>Bottom line:</strong> Honcho is the quality leader, mem0 is the strongest conditional and lower-complexity option, and Hindsight is the changing-fact alternative with lower workload than Honcho. None of the tested configurations is reliable enough to treat later contradictory text as harmless by default.</p>
+      <p class="decision-close"><strong>Bottom line:</strong> Honcho is the best choice when the assistant must track evolving personal histories. mem0 is the best choice for retaining condition-bound preferences in a simpler stack. Hindsight is the strongest changing-fact alternative at a lower workload. None of the tested configurations is reliable enough to treat later contradictory text as harmless by default.</p>
     </section>
   </main>
 

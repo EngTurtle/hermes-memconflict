@@ -614,10 +614,13 @@ thead th { background: var(--paper-deep); font-size: 0.7rem; letter-spacing: 0.0
 .session-dot-correct { fill: var(--teal); }
 .session-dot-wrong { fill: var(--red); }
 
-.case-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+.case-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
 .case-card { position: relative; padding: 1.5rem; border-top: 5px solid var(--blue); background: var(--card); box-shadow: var(--shadow); }
 .case-card:nth-child(2) { border-color: var(--static); }
 .case-card:nth-child(3) { border-color: var(--conditional); }
+.case-card:nth-child(4) { border-color: var(--static); }
+.case-card:nth-child(5) { border-color: var(--blue); }
+.case-card:nth-child(6) { border-color: var(--conditional); }
 .case-card p { color: #454a49; }
 .case-mechanism { margin: 1.6rem 0 0; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 0.82rem; font-weight: 760; }
 

@@ -348,11 +348,11 @@
         </div>
         <span class="wordmark-mark" style="background:${providerColors[provider.id]}" aria-hidden="true">${escapeHtml(provider.short.slice(0, 2).toUpperCase())}</span>
       </div>
-      <p class="provider-verdict"><span class="provider-field">Result</span>${escapeHtml(provider.verdict)}</p>
-      <p class="provider-process"><span class="provider-field">Tested setup</span>${escapeHtml(provider.tested)}</p>
-      <p class="provider-caveat"><span class="provider-field">Benchmark caveat</span>${escapeHtml(provider.caveat)}</p>
+      <p class="provider-verdict"><span class="provider-field">Deployment takeaway</span>${escapeHtml(provider.verdict)}</p>
+      <p class="provider-process"><span class="provider-field">What was tested</span>${escapeHtml(provider.tested)}</p>
+      <p class="provider-caveat"><span class="provider-field">Maintenance and operational notes</span>${escapeHtml(provider.caveat)}</p>
       <details class="provider-history">
-        <summary>Integration and timeout notes</summary>
+        <summary>Benchmark-specific notes</summary>
         <dl class="provider-note-list">
           <div><dt>Integration work</dt><dd>${escapeHtml(provider.process)}</dd></div>
           <div><dt>Timeout and failure behavior</dt><dd>${escapeHtml(provider.timeout)}</dd></div>
@@ -448,7 +448,7 @@
             ...options.scales.x,
             min: 0,
             max: 12000,
-            title: { ...options.scales.x.title, text: "Weighted workload units per dialogue turn (0.1 : 1 : 5)" },
+            title: { ...options.scales.x.title, text: "Tokens* per dialogue turn (0.1 : 1 : 5)" },
             ticks: { ...options.scales.x.ticks, callback: (value) => number(value) }
           },
           y: { ...options.scales.y, min: 0.1, max: 0.52, title: { ...options.scales.y.title, text: "Macro answer score (−1 to +1)" } }
@@ -459,7 +459,7 @@
           tooltip: {
             ...options.plugins.tooltip,
             callbacks: {
-              label: (context) => `${context.dataset.label}: macro score ${context.raw.y.toFixed(3)}, weighted workload ${number(context.raw.x, 0)} / turn`
+              label: (context) => `${context.dataset.label}: macro score ${context.raw.y.toFixed(3)}, ${number(context.raw.x, 0)} tokens* / turn`
             }
           }
         }
@@ -489,8 +489,8 @@
       <tbody>${featured.flatMap((provider) => {
         const series = data.sessionSeries[provider.id];
         return [
-          `<tr><th scope="row">${escapeHtml(provider.name)} — correct</th>${series.map((row) => `<td>${percent(row[1] / row[0])}</td>`).join("")}</tr>`,
-          `<tr><th scope="row">${escapeHtml(provider.name)} — wrong</th>${series.map((row) => `<td>${percent(row[4] / row[0])}</td>`).join("")}</tr>`
+          `<tr><th scope="row">${escapeHtml(provider.name)} -correct</th>${series.map((row) => `<td>${percent(row[1] / row[0])}</td>`).join("")}</tr>`,
+          `<tr><th scope="row">${escapeHtml(provider.name)} -wrong</th>${series.map((row) => `<td>${percent(row[4] / row[0])}</td>`).join("")}</tr>`
         ];
       }).join("")}</tbody>`;
   }
