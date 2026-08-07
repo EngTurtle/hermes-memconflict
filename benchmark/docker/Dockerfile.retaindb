@@ -1,0 +1,55 @@
+# MemConflict x RetainDB. Verified in Docker (1-persona smoke, local vLLM).
+#
+# RetainDB Local is a Node HTTP server (@retaindb/local) that the Python
+# adapter spawns and drives over REST. So the image needs both Node 22 (the
+# server) and Python (the harness plus adapter). RetainDB has no internal
+# LLM. gpt-oss-120b, or the shared vLLM, serves only the answer and judge role.
+#
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM node:22-bookworm-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install Python (the node base image has node/npm but no python).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip python3-venv curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation) and the light adapter dependencies.
+#    Embeddings run in Node, not Python.
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install --break-system-packages -r /app/external/MemConflict/requirements.txt \
+      requests jsonlines python-dotenv tiktoken
+
+# 2. Copy the shared harness, the RetainDB adapter, and the MemConflict
+#    dataset and Evaluation helpers. docker-compose bind-mounts benchmark/
+#    and retaindb/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY retaindb /app/retaindb
+COPY external/MemConflict /app/external/MemConflict
+
+# 3. Install the RetainDB Local server package (@retaindb/local@0.2.1)
+#    outside /app/retaindb, into /opt/retaindb_pkg, instead of into
+#    /app/retaindb/.retaindb_pkg. Compose bind-mounts the whole retaindb/
+#    directory over /app/retaindb for live edits. That bind-mount would
+#    otherwise shadow node_modules installed under it (the host
+#    .retaindb_pkg/ carries only package.json and package-lock.json, not
+#    node_modules), and the server would then fail to find cli.js at
+#    container start. entrypoint.retaindb.sh points RETAINDB_CLI_JS at this
+#    install, so _retaindb_server.py's default in-tree lookup never runs.
+#    The semantic `local-transformers` embedding provider also needs
+#    @xenova/transformers, which pulls in the native sharp/libvips binary.
+#    It is installed here because `hash` embeddings are smoke-only.
+#    Every headline run uses RETAINDB_EMBEDDING_PROVIDER=local-transformers,
+#    for fairness, since the other providers get real semantic embeddings.
+#    This runs as a separate npm install, outside the lockfile, so the
+#    pinned @retaindb/local install stays reproducible through npm ci.
+COPY retaindb/.retaindb_pkg/package.json retaindb/.retaindb_pkg/package-lock.json /opt/retaindb_pkg/
+RUN cd /opt/retaindb_pkg && npm ci && npm install @xenova/transformers
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.retaindb.sh"]

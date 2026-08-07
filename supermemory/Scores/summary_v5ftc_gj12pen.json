@@ -1,0 +1,74 @@
+{
+  "system": "supermemory",
+  "scored_questions": 3750,
+  "question_rows_in_file": 3750,
+  "unroutable_rows": {},
+  "judge_methods": {
+    "llm_judge": 3745,
+    "missing_answer": 5
+  },
+  "overall": {
+    "micro": {
+      "AA": 0.19746666666666668,
+      "SEH@3": 0.3837333333333333,
+      "SEH@5": 0.4432,
+      "log_rank@3": 0.32704895329047806,
+      "EUG_gap@3": 0.18626666666666664,
+      "EUG@5": 0.5081227436823105
+    },
+    "macro_memconflict_protocol": {
+      "AA": 0.2878890346558371,
+      "SEH@3": 0.5367232303586683,
+      "SEH@5": 0.5855747295156664,
+      "log_rank@3": 0.4791447073356389,
+      "EUG_gap@3": 0.24883419570283113,
+      "EUG@5": 0.5421899058324127
+    }
+  },
+  "by_conflict_type": {
+    "dynamic_conflict": {
+      "N": 2946,
+      "AA": 0.14358452138492872,
+      "SEH@3": 0.3088934147997284,
+      "SEH@5": 0.3740665308893415,
+      "N_at_5": 2946,
+      "log_rank@3": 0.25173585991902026,
+      "EUG_gap@3": 0.1653088934147997,
+      "EUG@5": 0.43148820326678766,
+      "EUG@5_N": 1102,
+      "diagnostic": {
+        "UOCS": 0.3781398506449423
+      }
+    },
+    "static_conflict": {
+      "N": 360,
+      "AA": 0.02638888888888889,
+      "SEH@3": 0.5805555555555556,
+      "SEH@5": 0.6416666666666667,
+      "N_at_5": 360,
+      "log_rank@3": 0.4955987720138923,
+      "EUG_gap@3": 0.5541666666666667,
+      "EUG@5": 0.24675324675324675,
+      "EUG@5_N": 231,
+      "diagnostic": {
+        "CRS": 0.4666666666666667
+      }
+    },
+    "conditional_conflict": {
+      "N": 444,
+      "AA": 0.6936936936936937,
+      "SEH@3": 0.7207207207207207,
+      "SEH@5": 0.740990990990991,
+      "N_at_5": 444,
+      "log_rank@3": 0.6900994900740042,
+      "EUG_gap@3": 0.027027027027026973,
+      "EUG@5": 0.9483282674772037,
+      "EUG@5_N": 329,
+      "diagnostic": null
+    }
+  },
+  "metric_notes": {
+    "EUG_gap@3": "upstream MemConflict EUG: SEH@3 - AA per type; macro value = Average_EUG",
+    "EUG@5": "this repo only: mean AA over questions whose gold evidence reached rank <= 5"
+  }
+}

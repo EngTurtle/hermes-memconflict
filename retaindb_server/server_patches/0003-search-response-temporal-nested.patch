@@ -1,0 +1,22 @@
+--- a/packages/server/src/api/memory.ts	2026-07-22 01:38:02.468817997 +0000
++++ b/packages/server/src/api/memory.ts	2026-07-22 01:38:02.518340547 +0000
+@@ -859,10 +859,15 @@
+           semantic_status: semanticStatusFromMetadata(r.memory.metadata),
+           version: r.memory.version,
+           temporal: {
+-            document_date: formatDate(r.memory.documentDate),
+-            event_date: formatDate(r.memory.eventDate),
+-            valid_from: formatDate(r.memory.validFrom),
+-            valid_until: formatDate(r.memory.validUntil),
++            // Read temporal from the engine's nested `memory.temporal` shape
++            // (engine/memory/search.ts maps documentDate/eventDate/validFrom/
++            // validUntil UNDER memory.temporal). The original top-level reads
++            // returned null for every field even though the DB stored the dates.
++            // `?? r.memory.<field>` keeps the old top-level path working too.
++            document_date: formatDate(r.memory.temporal?.documentDate ?? r.memory.documentDate),
++            event_date: formatDate(r.memory.temporal?.eventDate ?? r.memory.eventDate),
++            valid_from: formatDate(r.memory.temporal?.validFrom ?? r.memory.validFrom),
++            valid_until: formatDate(r.memory.temporal?.validUntil ?? r.memory.validUntil),
+           },
+         },
+         chunk: body.include_chunks && r.chunk ? {

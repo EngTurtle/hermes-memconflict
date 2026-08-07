@@ -1,0 +1,107 @@
+# MemConflict x Honcho. SCAFFOLD (adapter under active development, see
+# honcho/eval_honcho.py).
+#
+# This image runs the HARNESS side: the eval_honcho.py adapter, driven by the
+# honcho-ai SDK over REST. It talks to the honcho-api/honcho-deriver services
+# (HONCHO_SERVER_MODE=shared, the compose default) or spawns its own Honcho
+# server + deriver + Postgres in-process (HONCHO_SERVER_MODE=spawn, the
+# BENCH_CLOCKSYNC path: one container, one faked clock domain, mirrors
+# Dockerfile.retaindb-server's in-container Postgres for the same reason).
+# So this image needs both the harness/adapter's own Python deps AND a full
+# copy of the pinned external/honcho source plus ITS deps, installed with uv
+# exactly as external/honcho/Dockerfile does, so honcho/_honcho_server.py can
+# `uv run` the server and deriver as child processes under a libfaketime
+# LD_PRELOAD it controls (supermemory's spawn-mode pattern), instead of
+# uv-syncing at container-start time against the network.
+#
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HUB_DISABLE_XET=1
+
+# curl: honcho-api health polling (attach mode) and image debugging.
+# libfaketime: BENCH_CLOCKSYNC=1 spawn mode (adapter-controlled LD_PRELOAD,
+# supermemory's pattern -- see honcho/_honcho_server.py).
+# git: `uv sync` on the vendored external/honcho checkout below reads
+# uv.lock, which pins some deps by VCS ref.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl libfaketime git \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation), the honcho-ai SDK pinned to the exact
+#    version the Hermes plugin declares, and psycopg for the spawn-mode
+#    in-container Postgres bootstrap (HONCHO_PG_CREATE_DB path,
+#    honcho/_honcho_server.py).
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install -r /app/external/MemConflict/requirements.txt \
+      "honcho-ai==2.2.0" "psycopg[binary]" jsonlines python-dotenv tiktoken
+
+# 2. Install uv (the pinned external/honcho checkout is uv-managed; its own
+#    Dockerfile uses `uv sync`, and doing the same here keeps its resolved
+#    dependency set identical to a native Honcho deployment, instead of
+#    hand-picking a subset with pip).
+COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /bin/uv
+
+# 3. Vendor the pinned Honcho server + SDK source (external/honcho, tag
+#    v3.0.9) and bootstrap its deps AT BUILD TIME, so a container start needs
+#    no uv.lock network resolution. This is the copy the SPAWN arm's
+#    honcho/_honcho_server.py execs uvicorn and the deriver against
+#    (/app/external/honcho/.venv/bin/python). The ATTACH arm (default,
+#    HONCHO_SERVER_MODE=shared) never touches this copy; it talks to the
+#    honcho-api/honcho-deriver compose services instead.
+COPY external/honcho /app/external/honcho
+RUN cd /app/external/honcho \
+ && uv sync --frozen --no-dev
+
+# 3b. Warm the tiktoken BPE-rank cache AT BUILD TIME. tiktoken fetches
+#     cl100k_base and o200k_base from openaipublic.blob.core.windows.net on
+#     first use (external/honcho/src/embedding_client.py:185,
+#     src/utils/tokens.py:11). Under BENCH_CLOCKSYNC the deriver's perceived
+#     clock sits in the dataset year, so TLS rejects every certificate as
+#     "not yet valid", every "save representation" call fails, and the run
+#     writes ZERO documents while the API keeps answering (measured on the
+#     first Docker smoke, 2026-08-01: 170 messages, 0 documents). A warm
+#     cache never opens the socket. _honcho_server.child_env() copies
+#     os.environ, so the spawned API and deriver inherit this path.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken_cache
+RUN mkdir -p "$TIKTOKEN_CACHE_DIR" \
+ && /app/external/honcho/.venv/bin/python -c \
+      "import tiktoken; [tiktoken.get_encoding(n) for n in ('cl100k_base','o200k_base')]" \
+ && python3 -c \
+      "import tiktoken; [tiktoken.get_encoding(n) for n in ('cl100k_base','o200k_base')]" \
+ && test "$(ls -1 "$TIKTOKEN_CACHE_DIR" | wc -l)" -ge 2
+
+# 4. In-container PGDG Postgres + pgvector, for the SPAWN arm under
+#    BENCH_CLOCKSYNC=1 only (HONCHO_PG_CREATE_DB path). A shared central
+#    honcho-pg cannot be clock-faked per shard (one postmaster, co-tenant
+#    shards at different logical dates), so that arm runs its own throwaway
+#    cluster inside THIS container's clock domain instead -- the same reason
+#    Dockerfile.retaindb-server bakes PGDG Postgres. pg16 matches the shared
+#    honcho-pg service (pgvector/pgvector:pg16), so behavior is the same
+#    between the shared and spawned paths.
+RUN install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-16 postgresql-16-pgvector \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -f /usr/lib/postgresql/16/lib/vector.so \
+ && test -f /usr/share/postgresql/16/extension/vector.control \
+ && install -d -o postgres -g postgres /var/lib/bench-pg
+
+# 5. Copy the shared harness, the Honcho adapter, and the MemConflict
+#    dataset and Evaluation helpers. docker-compose bind-mounts benchmark/
+#    and honcho/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY honcho /app/honcho
+COPY external/MemConflict /app/external/MemConflict
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.honcho.sh"]

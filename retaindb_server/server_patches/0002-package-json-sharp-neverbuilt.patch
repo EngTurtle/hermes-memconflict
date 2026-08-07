@@ -1,0 +1,12 @@
+--- a/package.json	2026-07-21 23:08:50.179852326 +0000
++++ b/package.json	2026-07-21 23:08:50.181806343 +0000
+@@ -27,5 +27,8 @@
+     "node": ">=18.0.0",
+     "pnpm": ">=9.0.0"
+   },
+-  "packageManager": "pnpm@9.15.0"
++  "packageManager": "pnpm@9.15.0",
++  "pnpm": {
++    "neverBuiltDependencies": ["sharp"]
++  }
+ }

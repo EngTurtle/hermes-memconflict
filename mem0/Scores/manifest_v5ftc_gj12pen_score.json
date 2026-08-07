@@ -1,0 +1,168 @@
+{
+  "canonical_config": {
+    "decoding": {
+      "MEMCONFLICT_ENABLE_THINKING": "1",
+      "MEMCONFLICT_JSON_MODE": "1",
+      "MEMCONFLICT_JSON_THINKING": "1",
+      "MEMCONFLICT_MIN_P": "0",
+      "MEMCONFLICT_PRESENCE_PENALTY": "0",
+      "MEMCONFLICT_REASONING_EFFORT": "low",
+      "MEMCONFLICT_TOP_K": "64",
+      "MEMCONFLICT_TOP_P": "0.95",
+      "OPENAI_MAX_TOKENS": "16384",
+      "OPENAI_TEMPERATURE": "1.0"
+    },
+    "stage": "score"
+  },
+  "dataset": {
+    "bytes": 39671712,
+    "line_count": 30,
+    "path": "/app/external/MemConflict/Data/Step4_4.jsonl",
+    "sha256": "8ef9ec8589eccb86f63ab3a819a9180217405351a8d5846866721ea74babe092"
+  },
+  "env": {
+    "BENCH_JUDGE_MIN_P": "0",
+    "BENCH_JUDGE_PRESENCE_PENALTY": "0",
+    "BENCH_JUDGE_TEMPERATURE": "1.0",
+    "BENCH_JUDGE_TOP_K": "64",
+    "BENCH_JUDGE_TOP_P": "0.95",
+    "BENCH_PYTHON": "python3",
+    "MEMCONFLICT_ENABLE_THINKING": "1",
+    "MEMCONFLICT_EVAL_DIR": "benchmark/penalty_judge_eval",
+    "MEMCONFLICT_JSON_MODE": "1",
+    "MEMCONFLICT_JSON_THINKING": "1",
+    "MEMCONFLICT_MIN_P": "0",
+    "MEMCONFLICT_PRESENCE_PENALTY": "0",
+    "MEMCONFLICT_REASONING_EFFORT": "low",
+    "MEMCONFLICT_REQUEST_TIMEOUT": "600",
+    "MEMCONFLICT_TOP_K": "64",
+    "MEMCONFLICT_TOP_P": "0.95",
+    "OPENAI_API_KEY": "<redacted>",
+    "OPENAI_BASE_URL": "http://vllm-judge:8000/v1",
+    "OPENAI_MAX_TOKENS": "16384",
+    "OPENAI_MODEL": "gemma-4-12b",
+    "OPENAI_TEMPERATURE": "1.0",
+    "RETRY_TIMES": "40",
+    "SCORE_WORKERS": "96",
+    "STAGE": "score",
+    "WAIT_TIME_LOWER": "2",
+    "WAIT_TIME_UPPER": "45"
+  },
+  "preset": "",
+  "provider": "mem0",
+  "repo": {
+    "git_rev_parse": null,
+    "git_sha_env": "32573f1bdbe111b5da30bcb9dff9b82a2cab10cf",
+    "git_sha_stamp": "32573f1bdbe111b5da30bcb9dff9b82a2cab10cf",
+    "git_sha_stamp_file": "/app/benchmark/.git_sha",
+    "head_sha": "32573f1bdbe111b5da30bcb9dff9b82a2cab10cf",
+    "head_sha_source": "env:GIT_SHA",
+    "note": "no .git in this container: head_sha comes from env:GIT_SHA (export GIT_SHA before `docker compose run`, or write /app/benchmark/.git_sha on the host, to keep it populated)",
+    "submodule_status": null,
+    "worktree_dirty": null
+  },
+  "run_contract": {
+    "answer_judge": {
+      "base_url": "http://vllm-judge:8000/v1",
+      "decoding": {
+        "MEMCONFLICT_ENABLE_THINKING": "1",
+        "MEMCONFLICT_JSON_MODE": "1",
+        "MEMCONFLICT_JSON_THINKING": "1",
+        "MEMCONFLICT_MIN_P": "0",
+        "MEMCONFLICT_PRESENCE_PENALTY": "0",
+        "MEMCONFLICT_REASONING_EFFORT": "low",
+        "MEMCONFLICT_TOP_K": "64",
+        "MEMCONFLICT_TOP_P": "0.95",
+        "OPENAI_MAX_TOKENS": "16384",
+        "OPENAI_TEMPERATURE": "1.0"
+      },
+      "judge_reasoning_effort": null,
+      "judge_thinking": null,
+      "model": "gemma-4-12b",
+      "retry": {
+        "RETRY_TIMES": "40",
+        "WAIT_TIME_LOWER": "2",
+        "WAIT_TIME_UPPER": "45"
+      },
+      "thinking": null
+    },
+    "code_sha": "32573f1bdbe111b5da30bcb9dff9b82a2cab10cf",
+    "dataset": {
+      "line_count": 30,
+      "path": "/app/external/MemConflict/Data/Step4_4.jsonl",
+      "sha256": "8ef9ec8589eccb86f63ab3a819a9180217405351a8d5846866721ea74babe092"
+    },
+    "preset": "",
+    "prompt_hashes": {
+      "answer_system_prompt": "sha256:d01eae93c82db3835902e83a9bd462c3e4dc68512332d5274b089e4c5463ba6d",
+      "judge_system_prompt": "sha256:9f41d4f850246c856553f1afb89bd2385fce11377f8463be41ea2307efff19d1"
+    },
+    "provider": "mem0",
+    "retain": {
+      "CANONICAL": null,
+      "CONSOLIDATION_WAIT_TIMEOUT_S": null,
+      "DISABLE_SCHEDULER": null,
+      "EXTRACT": null,
+      "HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION": null,
+      "LIFECYCLE": null,
+      "MEM0_ADD_BATCH_SIZE": null,
+      "ORACLE": null,
+      "PLUGIN_AUTO_SLEEP": null,
+      "PLUGIN_CONFIG": null,
+      "PLUGIN_PREFETCH_OVERLAY": null,
+      "PLUGIN_SESSION_SLEEP": null,
+      "PREFER_OBSERVATIONS": null,
+      "RETAINDB_RETAIN_GRANULARITY": null,
+      "RETAINDB_SERVER_PROFILE": null,
+      "RETAINDB_SERVER_PROMOTION_MODE": null,
+      "RETAINDB_SERVER_WAIT_LIFECYCLE": null,
+      "RETAIN_GRANULARITY": null,
+      "SUPERMEMORY_INGEST_ENDPOINT": null,
+      "SUPERMEMORY_RETAIN_GRANULARITY": null,
+      "USE_DATASET_TIME": null,
+      "WAIT_CONSOLIDATION": null
+    },
+    "retrieval": {
+      "MNEMOSYNE_ENHANCED_RECALL": null,
+      "MNEMOSYNE_FACT_RECALL_ENABLED": null,
+      "PLUGIN_NATIVE_RECALL": null,
+      "RECALL_TYPES": null,
+      "RETAINDB_SERVER_PLUGIN_OVERLAY": null,
+      "SUPERMEMORY_DOCUMENTS_ARM": null,
+      "SUPERMEMORY_RECALL_ENDPOINT": null,
+      "SUPERMEMORY_RERANK": null,
+      "SUPERMEMORY_REWRITE_QUERY": null,
+      "SUPERMEMORY_SEARCH_MODE": null,
+      "SUPERMEMORY_SEARCH_THRESHOLD": null,
+      "top_k": null
+    },
+    "serving": {
+      "base_url": "http://vllm-judge:8000/v1",
+      "checkpoint_roots": null,
+      "embed_model_alias": null,
+      "engine_version": null,
+      "image": null,
+      "image_digest": null,
+      "model_alias": "gemma-4-12b",
+      "served_ids": null
+    },
+    "temporal_capability": "controlled_process_clock",
+    "temporal_contract": "none"
+  },
+  "run_contract_hash": "sha256:4eed2cf35110d1172fa680052fc9ccaa294b152a0ef07de4974221d57c432fa1",
+  "run_contract_missing_required": [
+    "retrieval.top_k"
+  ],
+  "run_contract_strict": false,
+  "run_tag": "v5ftc_gj12pen",
+  "serving_envelope": {
+    "note": "no serving-envelope sidecar found (checked: /app/mem0/Scores/serving_envelope_v5ftc_gj12pen.json)"
+  },
+  "stage": "score",
+  "temporal_capability": "controlled_process_clock",
+  "temporal_contract": "none",
+  "timestamp": "2026-08-05T18:56:58.226219+00:00",
+  "token_usage": {
+    "note": "no token-usage sidecar found (checked: /app/mem0/Results/token_usage_v5ftc_gj12pen.json)"
+  }
+}

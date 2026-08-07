@@ -1,0 +1,23 @@
+# Keep the benchmark image build context small + reproducible.
+# (Build context is the repo root; see benchmark/docker/docker-compose.yml.)
+
+# Host Python venv (Windows) — never goes in the Linux image.
+.venv/
+**/__pycache__/
+**/*.pyc
+
+# Secrets
+.env
+benchmark/.env
+
+# Disposable runtime state + model caches (regenerated in-container).
+.hermes/
+.fastembed_cache/
+
+# Large run artifacts — the container writes fresh ones to a bind-mount.
+benchmark/Results/
+benchmark/Scores/
+
+# VCS + editor cruft (submodule sources are still copied; their .git dirs aren't).
+**/.git/
+.claude/

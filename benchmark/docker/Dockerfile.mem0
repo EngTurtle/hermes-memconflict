@@ -1,0 +1,82 @@
+# MemConflict x mem0. SCAFFOLD (host smoke verified; full Docker run pending).
+#
+# mem0 is a pure-Python, fully self-hosted memory SDK. It owns an internal LLM
+# (single-pass additive fact extraction on mem0ai 2.x), an embedder, and a
+# vector store. It needs no Node and no external DB server. The vector store
+# runs embedded (qdrant, on-disk path) or against the shared `qdrant` compose
+# service for sharded runs. So the image is plain Python. The shared vLLM
+# serves both the shared answer+judge role and mem0's internal LLM.
+#
+# python:3.11 clears mem0ai 2.x's requires-python >=3.10 floor.
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MEM0_TELEMETRY=False \
+    HF_HUB_DISABLE_XET=1 \
+    TOKENIZERS_PARALLELISM=false
+
+# curl is base tooling. libfaketime supports the clock-sync arm
+# (BENCH_CLOCKSYNC=1): LD_PRELOAD applies it to the generate-stage mem0
+# Python process, so its OS clock follows the logical dataset session date.
+# This is still required on mem0ai 2.x. The additive-extraction prompt
+# resolves its "## Observation Date" and "## Current Date" sections per
+# add() call from datetime.now(timezone.utc)
+# (mem0/configs/prompts.py:_resolve_dates), and mem0 stamps a memory's
+# created_at from the process clock when the caller supplies none.
+# The 0.1.118 rationale is now obsolete: that release froze "Today's date
+# is ..." into FACT_RETRIEVAL_PROMPT at import time, so eval_mem0.py had to
+# monkeypatch the line per add() call. 2.x has no frozen prompt, and the
+# patch is deleted. libfaketime alone covers it now.
+# libfaketime has no effect otherwise. See benchmark/docker/clock_sync.sh.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation) and the mem0 SDK. mem0ai pins
+#    qdrant-client (the embedded vector store) and the openai SDK.
+#    sentence-transformers is added for the local HuggingFace embedder
+#    fallback (offline runs instead default to the shared vllm-embed
+#    through the OpenAI-compatible embedder, which needs no weights).
+#
+#    Use mem0ai[nlp]==2.0.14, not 0.1.118. 2.x replaced the two-phase
+#    extract-then-ADD/UPDATE/DELETE pipeline with single-pass additive
+#    extraction and hybrid (semantic, BM25, and entity) retrieval. The [nlp]
+#    extra pulls spacy, and fastembed supplies qdrant's BM25 sparse vectors.
+#    Without either, mem0 degrades silently to semantic-only retrieval, a
+#    different arm than the one under test. Treat both as required build
+#    dependencies, not optional ones.
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install -r /app/external/MemConflict/requirements.txt \
+      "mem0ai[nlp]==2.0.14" fastembed jsonlines python-dotenv tiktoken sentence-transformers
+
+# 1b. Bake the two optional-path model artifacts here so the runtime needs no
+#     egress (container runs sit behind the egress proxy; a lazy download
+#     there fails, and mem0 falls back to a degraded arm without reporting it).
+#     * spacy's en_core_web_sm supports mem0's entity/BM25 lemmatization.
+#       Without this step, spacy tries to download it on first use at runtime.
+#     * fastembed's Qdrant/bm25 sparse encoder: mem0 lazily constructs
+#       SparseTextEmbedding(model_name="Qdrant/bm25")
+#       (mem0/vector_stores/qdrant.py:88-89) on first upsert or search.
+#       FASTEMBED_CACHE_PATH pins the cache to a real image path instead of
+#       fastembed's tempdir default, so the warmed weights survive into the run.
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
+RUN python3 -m spacy download en_core_web_sm \
+ && python3 -c "import en_core_web_sm; en_core_web_sm.load(); print('[build] spacy en_core_web_sm OK')" \
+ && python3 -c "from fastembed import SparseTextEmbedding; \
+list(SparseTextEmbedding(model_name='Qdrant/bm25').embed(['warm the cache'])); \
+print('[build] fastembed Qdrant/bm25 cached in', __import__('os').environ['FASTEMBED_CACHE_PATH'])"
+
+# 2. Copy the shared harness, the mem0 adapter, and the MemConflict dataset
+#    and Evaluation helpers. docker-compose bind-mounts benchmark/ and
+#    mem0/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY mem0 /app/mem0
+COPY external/MemConflict /app/external/MemConflict
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.mem0.sh"]

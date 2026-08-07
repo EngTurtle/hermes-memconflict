@@ -1,0 +1,77 @@
+# Python venv
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets — matches any provider folder's .env (mnemosyne/.env, hindsight/.env, ...)
+.env
+
+# Local runtime state + model/embedding caches (regenerated at runtime)
+.hermes/
+.fastembed_cache/
+.hf_cache/
+.pg0/
+
+# RetainDB: installed Node package + disposable per-run server data (regenerated
+# at runtime). The package.json / package-lock.json under .retaindb_pkg ARE
+# committed so `npm ci` reproduces the exact @retaindb/local version.
+retaindb/.retaindb_pkg/node_modules/
+retaindb/.retaindb_runs/
+
+# Supermemory: disposable per-run server data dirs (embedded graph engine store,
+# auth secret, embedding model cache) — regenerated at runtime. The server binary
+# itself is installed outside the repo (~/.supermemory, ~/.local/bin) by the
+# vendor install script / Dockerfile, never committed.
+supermemory/.supermemory_runs/
+supermemory/.supermemory/
+
+# Honcho: disposable per-run server state (spawn-mode API+deriver logs, the
+# in-container Postgres data dir under BENCH_CLOCKSYNC=1) — regenerated at
+# runtime by honcho/_honcho_server.py. The pinned server source lives in the
+# external/honcho submodule, never here.
+honcho/.honcho_runs/
+
+# OpenViking: disposable per-run server state (the generated ov.conf, the
+# spawned server log, and the AGFS content store plus local vector index under
+# one workspace dir) — regenerated at runtime by
+# openviking/_openviking_server.py. The server itself is the `openviking` pip
+# distribution, installed by Dockerfile.openviking, never committed.
+openviking/.openviking_runs/
+
+# In-progress / intermediate benchmark run artifacts, per provider folder
+# (mnemosyne/, hindsight/, retaindb/). Summary JSON is committed explicitly.
+*/Results/shards/
+*/Results/dbs/
+*/Results/*.log
+
+# Raw result JSONL is committed as a .7z archive next to it, never raw. One
+# Hindsight run reached 396 MB, over GitHub's 100 MB file limit, because the
+# diagnostic retrieval capture stores every candidate the provider ranked.
+# The same file compresses about 27:1. Extract before scoring:
+#   7z e <provider>/Results/v4/<file>.jsonl.7z -o<provider>/Results/v4/
+*/Results/**/*.jsonl
+*/Scores/*.log
+*/Scores/_annotated_input.jsonl
+mnemosyne/Scores/mnemosyne_eval_scores.json
+
+# Host-side code-SHA stamp for containers launched without GIT_SHA in env
+# (written by run_shards.sh / stamp_git_sha.sh, read by write_manifest.py) —
+# per-launch state, never committed.
+benchmark/.git_sha
+
+# Derived copy of external/MemConflict/Evaluation with the penalty-judge rubric
+# applied. benchmark/make_penalty_judge_evaldir.py is the committed artifact;
+# rebuild the copy with `python benchmark/make_penalty_judge_evaldir.py`.
+# Committing it would duplicate the pinned submodule and let the two drift.
+benchmark/penalty_judge_eval/
+
+# Local GPU telemetry (GPU-Z sensor log) — machine-specific monitoring artifact,
+# not project content. Kept out of git but load-bearing for wedge forensics:
+# Memory Controller Load distinguishes a spinning stuck kernel (GPU load pinned,
+# mem-controller load collapsed) from genuine compute, which nvidia-smi cannot.
+benchmark/GPU-Z Sensor Log.txt
+
+# Per-persona pretty-printed result JSON duplicates the .jsonl committed as
+# .7z beside it: identical parsed content, ~100x the bytes. Verified across 90
+# files in three waves (2026-08-05). Commit the .7z; the .json is derivable.
+*/Results/**/*_results_*_p[0-9]*.json

@@ -1,0 +1,1 @@
+{"name":"retaindb-runner","private":true,"dependencies":{"@retaindb/local":"^0.2.1"}}

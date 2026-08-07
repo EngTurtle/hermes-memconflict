@@ -1,0 +1,2154 @@
+# MemConflict memory-provider benchmark: common stack.
+#
+# The stack has two long-lived GPU inference servers, shared by every
+# provider, plus one ephemeral run-service per provider.
+#
+#   docker compose up -d vllm-gen vllm-embed
+#
+#   docker compose run -d --rm mnemosyne          # full Mnemosyne run
+#   docker compose run -d --rm -e ORACLE=1 mnemosyne
+#   docker compose run -d --rm hindsight          # (scaffold)
+#   docker compose run -d --rm retaindb           # (scaffold)
+#
+#   docker compose down
+#
+# The provider services use the `run` profile. A bare `docker compose up -d`
+# starts only the two vLLM servers. Start a provider run explicitly with
+# `compose run` (this also starts the servers if they are not already up).
+# Each `run --rm` container is disposable and gets a unique name. Several
+# runs (with distinct RUN_TAG values) can run at the same time.
+#
+# GPU note: this stack needs the NVIDIA Container Toolkit (Docker Desktop
+# WSL2 has it). HF cache: to use a different host path, set HF_CACHE=...
+
+# ---- shared bits for the per-provider run-services -------------------------
+x-provider-run: &provider-run
+  restart: "no"                          # batch job: run once to completion
+  profiles: ["run"]                      # not started by a bare `compose up`
+  # No container_name: `compose run --rm` creates a unique name for each
+  # invocation. Parallel runs with distinct RUN_TAG values never collide.
+
+services:
+  vllm-gen:
+    # Serving model + contract version: see CLAUDE.md harness contract (v4).
+    # The nightly image is pinned by digest so a pull cannot silently change
+    # the contract (engine v0.23.1rc1.dev1373+g387189c42, flashinfer 0.6.14).
+    image: vllm/vllm-openai@sha256:9894a751bdd23059d922cab4d4a27e826fb0a69dad743bab6346dcb7c801533e
+    container_name: vllm-gen
+    entrypoint: ["vllm", "serve"]
+    command:
+      - "--model"
+      # Checkpoint choice and quantization rationale: docs/DECISIONS.md.
+      # Contract version history: CLAUDE.md harness contract section.
+      - "AxionML/Qwen3.5-4B-NVFP4"
+      - "--served-model-name"
+      - "qwen3.5-4b"
+      # 131072: featured contract v5 (docs/DECISIONS.md). Sized by the largest
+      # measured Honcho prompt: dream tool-result accumulation ~72,708 tokens
+      # plus the 8,192-token output reservation, ~81,000 total, with 38%
+      # headroom. The checkpoint's native window is 262,144. Contract v4
+      # minimal ran 32768 (Hindsight consolidation budget; 8192 lost ~8-11% of
+      # sessions, docs/TROUBLESHOOTING.md). vLLM allocates KV per actual
+      # token, not per configured window, so this raises no cost until the
+      # pool (434,238 tokens per the v5 boot log, identical at util 0.85
+      # and 0.74) runs out: 3.31 full-window requests, smokes only.
+      - "--max-model-len"
+      - "131072"
+      # KV-cache sizing is the real concurrency lever (docs/DECISIONS.md).
+      # There are two profiles. Override per stage. Do not hardcode a value:
+      #   0.94  SCORE/judge stages ONLY. Requires vllm-embed AND hindsight-rerank
+      #         stopped (both idle during scoring, so their share is free).
+      #   0.85  any generate/ingest stage. This leaves vllm-embed (0.07,
+      #         encoder, no KV cache) and hindsight-rerank (~0.5 GiB) their
+      #         share. (2026-08-02, transient: the interim decoder embedder
+      #         Qwen3-Embedding needed 0.21, which forced 0.74 here; the
+      #         final v5 embedder gte-modernbert-base restores 0.85.)
+      # Restart vllm-embed and drop this back to 0.85 before the next generate
+      # stage, or ingest embedding calls fail.
+      - "--gpu-memory-utilization"
+      - "${VLLM_GEN_GPU_MEM:-0.85}"
+      # 0 = no host-RAM offload buffers (measured 5.4GB sys RAM vs ~8GB without).
+      - "--cpu-offload-gb"
+      - "0"
+      # These values come from https://github.com/Li-Lee/vllm-qwen3.5-nvfp4-5090, used as an example.
+      - "--max-num-batched-tokens"
+      - "4096"
+      - "--kv-cache-dtype"
+      - "fp8"
+      # Qwen3.5-4B is a HYBRID model (gated delta-net + full attention). vLLM
+      # keeps prefix caching opt-in for hybrid models while the feature
+      # matures: `default_prefix_caching = is_prefix_caching_supported and
+      # not is_hybrid` (arg_utils.py:2501). So prefix caching defaulted OFF,
+      # with no warning line anywhere. The banner showed
+      # enable_prefix_caching=False, and vllm:prefix_cache_queries_total
+      # stayed at 0 (zero QUERIES, so the cache was never consulted). A user
+      # decision on 2026-07-27 enabled it here for the full minimal runs. The
+      # win is on the extraction path, where a fixed template repeats on
+      # every retain. The answer path is generation-bound, and its prompts
+      # diverge after ~300 shared tokens. This setting applies to the SHARED
+      # server, so it reaches all five providers the same way and the
+      # fairness line does not move.
+      # To verify, check for enable_prefix_caching=True in the banner and a
+      # NONZERO vllm:prefix_cache_queries_total (the token sidecar records
+      # both values, plus the window hit rate). Note: prompt_tokens_total
+      # counts logical prompt tokens regardless of cache hits, so token cost
+      # stays comparable across providers. But the compute the cache saves
+      # during prefill does NOT show in that count.
+      # docs/DECISIONS.md "Automatic prefix caching".
+      - "--enable-prefix-caching"
+      # This flag splits <think> into reasoning_content. With thinking off,
+      # it lets guided-JSON grammar engage from the first content token. The
+      # gemma4 parser's vLLM #39130 bug does not apply to qwen3.
+      # docs/TROUBLESHOOTING.md.
+      - "--reasoning-parser"
+      - "qwen3"
+      # Supermemory's tool-calling memory agent needs this flag (it parses
+      # the checkpoint's coder-style XML into a tool_calls array). It has no
+      # effect on plain completions.
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "qwen3_coder"
+      # Server default: thinking OFF (Qwen3.5 otherwise defaults to thinking
+      # ON). Request-level chat_template_kwargs can override this per call
+      # (the answer/judge stages set their own). Provider-internal calls
+      # (Mnemosyne, Hindsight) send none, so they inherit this default. For
+      # the fairness rule and full reasoning, see CLAUDE.md harness contract
+      # and docs/DECISIONS.md.
+      - "--default-chat-template-kwargs"
+      - '{"enable_thinking": false}'
+      # This is the server-side default sampling for callers that send no
+      # params (provider-internal calls). The checkpoint ships an empty
+      # generation_config.json, so without this setting those callers would
+      # run at neutral temp 1.0/top_p 1.0. The values match the Qwen3.5
+      # card's non-thinking set. Request-level params always win, so
+      # answer/judge (answer_env.sh) are not affected. presence_penalty is
+      # verified INERT here: vLLM's get_diff_sampling_param allowlist
+      # excludes it (vllm/config/model.py:1506). It stays here only as card
+      # documentation. Only the answer (1.5) and judge (0) stages apply
+      # presence_penalty, as an explicit request kwarg.
+      - "--override-generation-config"
+      - '{"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repetition_penalty": 1.0}'
+      # cudagraph_mode=PIECEWISE is disabled below. FULL_AND_PIECEWISE
+      # silently wedged the engine on SM 12.x (vllm#40969, vllm#48718).
+      # PIECEWISE is numerics-neutral and costs less than --enforce-eager.
+      # docs/TROUBLESHOOTING.md.
+      # - "--compilation-config"
+      # - '{"cudagraph_mode": "PIECEWISE"}'
+      # --no-async-scheduling is disabled below. It does not cure the wedge
+      # (the root cause is the flashinfer sampler race, see
+      # VLLM_USE_FLASHINFER_SAMPLER). It measurably lengthened
+      # mean-time-to-wedge, though, so we keep it as a free way to remove an
+      # aggravator. docs/TROUBLESHOOTING.md.
+      # - "--no-async-scheduling"
+    environment:
+      HF_HUB_DISABLE_XET: "1"
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"   # otherwise the v2 model runner dies: "UVA is not available"
+      # THE WEDGE FIX (disabled below): flashinfer's multi-CTA top-k sampler
+      # has a barrier race (flashinfer-ai/flashinfer#3615). It hits on every
+      # decode step here (SM120 + top_k=20 + multi-CTA concurrency). No
+      # release tag has the upstream fix yet, so this setting falls back to
+      # the PyTorch sampler instead. It is the same decoding contract, with a
+      # different kernel. Verify by the absence of "Using FlashInfer for
+      # top-p & top-k sampling." in the boot log. CLAUDE.md and
+      # docs/TROUBLESHOOTING.md have the full diagnosis.
+      # VLLM_USE_FLASHINFER_SAMPLER: "0"
+    volumes:
+      - "${HF_CACHE:-C:/Users/ollie/.cache/huggingface}:/root/.cache/huggingface"
+      # Persisted torch.compile/AOT cache, content-hashed per model+config.
+      - vllm_compile_cache:/root/.cache/vllm
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 240s                 # first load (weights already cached), so allow extra time
+
+  vllm-embed:
+    image: vllm/vllm-openai:v0.25.1
+    container_name: vllm-embed
+    entrypoint: ["vllm", "serve"]
+    command:
+      - "--model"
+      # Featured contract v5 embedder (docs/DECISIONS.md, amended 2026-08-02):
+      # 768 dims by user ruling, because Supermemory 0.0.5's embedding
+      # workflow step caps a 15-chunk batch at ~12,288 floats — 15x768=11,520
+      # fits, 13+x1024 (the earlier Qwen3-Embedding pick) wedged every
+      # session document (docs/TROUBLESHOOTING.md). This model defines NO
+      # instruction prefix at all (`"prompts": {}`), 8192 native positions
+      # end the v4 512-token truncation shims, MTEB retrieval 55.33. vLLM
+      # issue #28564 (ModernBertModel unsupported) does NOT reproduce on
+      # v0.25.1 — verified by live boot 2026-08-02. Contract v4 ran
+      # BAAI/bge-small-en-v1.5 at 384 dims. The served name changes with the
+      # model on purpose: adapters pass the name in the request body, so a
+      # stale default fails loudly with model-not-found instead of recording
+      # a false manifest.
+      - "Alibaba-NLP/gte-modernbert-base"
+      - "--served-model-name"
+      - "gte-modernbert-base"
+      - "--runner"
+      - "pooling"                        # replaces the removed `--task embed`
+      # 8192 is the model's native max_position_embeddings, no rope scaling.
+      # Featured-cadence inputs peak ~1,585 tokens; the only larger measured
+      # input (mem0 whole-session, 9,180 tokens) belongs to a cadence no arm
+      # uses, and callers send truncate_prompt_tokens anyway.
+      - "--max-model-len"
+      - "${VLLM_EMBED_MAX_LEN:-8192}"
+      # REQUIRED: this checkpoint's modules.json lists no Normalize module,
+      # so vLLM resolves use_activation=False and returns UNNORMALIZED
+      # vectors (measured L2 ~37-38). This flag restores unit norm, matching
+      # the model card's own F.normalize example. Without it, any consumer
+      # scoring by raw dot product gets a ~38x scale shift.
+      - "--pooler-config"
+      - '{"use_activation": true}'
+      # 0.07 (~1.14 GiB): encoder, NO KV cache (boot log kv_cache_size_tokens
+      # =None), measured 865-951 MiB at util 0.035. Fits beside vllm-gen at
+      # 0.85 and the 0.5 GiB hindsight-rerank carve-out.
+      - "--gpu-memory-utilization"
+      - "${VLLM_EMBED_GPU_MEM:-0.07}"
+    environment:
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      - "${HF_CACHE:-C:/Users/ollie/.cache/huggingface}:/root/.cache/huggingface"
+      - vllm_compile_cache:/root/.cache/vllm   # shared compile cache (hash-keyed)
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 180s
+
+  # ---- vllm-judge: a SECOND judge model, for the score stage only ----------
+  # This service exists to score an already-generated Results file with a
+  # judge model that is NOT the answer model. It breaks CLAUDE.md's
+  # "answer model and judge model are the same" rule on purpose, so a
+  # number it produces is comparable only against other vllm-judge scores,
+  # never against a qwen3.5-4b-judged score. State which judge produced any
+  # number you quote.
+  #
+  # It shares the GPU with nothing: `--gpu-memory-utilization 0.9` assumes
+  # vllm-gen AND vllm-embed are STOPPED. Scoring reads a JSONL file, so
+  # neither is needed. Start this service only under the `judge` profile,
+  # so a bare `compose up` cannot bring it up beside them.
+  vllm-judge:
+    profiles: ["judge"]
+    # The same pinned contract-v4 nightly digest vllm-gen runs. Pinning
+    # matters more here, not less: the gemma4 reasoning parser in this build
+    # is the ENGINE adapter (vllm/reasoning/gemma4_engine_reasoning_parser.py
+    # -> Gemma4ParserReasoningAdapter), which splits the thinking channel
+    # inside the engine. The old client-side gemma4 parser is what vllm#39130
+    # broke against xgrammar under thinking-off.
+    image: vllm/vllm-openai@sha256:9894a751bdd23059d922cab4d4a27e826fb0a69dad743bab6346dcb7c801533e
+    container_name: vllm-judge
+    entrypoint: ["vllm", "serve"]
+    command:
+      - "--model"
+      - "unsloth/gemma-4-12b-it-NVFP4"
+      - "--served-model-name"
+      - "gemma-4-12b"
+      # 32768, not the checkpoint's 262144, because a larger window only shrinks
+      # the KV budget on a 16GB card. vLLM subtracts max_tokens from the window,
+      # so the 16384 thinking+JSON output cap leaves 16384 tokens of INPUT.
+      # Five memories are not always small: Honcho's featured block runs ~5000
+      # tokens per item, and all 3750 of its judge prompts exceed 16384 (median
+      # 24602, max 30812). Set VLLM_JUDGE_MAX_LEN=49152 to score that wave --
+      # DECISIONS "The Honcho wave alone is judged at a 49,152-token window".
+      # Changing this needs `up -d --force-recreate`; `restart` re-reads nothing.
+      - "--max-model-len"
+      - "${VLLM_JUDGE_MAX_LEN:-32768}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_JUDGE_GPU_MEM:-0.9}"
+      - "--cpu-offload-gb"
+      - "0"
+      - "--kv-cache-dtype"
+      - "fp8"
+      # KV cache is THE binding constraint for this judge, not compute. At 32
+      # judge workers the server pins at Running 23-24 / Waiting 8-9 with KV at
+      # 98-99%, so every extra KV token buys concurrency directly.
+      # 4096, NOT 8192. Measured 2026-07-29: mnbt 8192 cut the KV cache from
+      # 78,905 to 47,053 tokens (about 23 concurrent sequences down to 14),
+      # because a wider prefill batch inflates activation memory and vLLM takes
+      # that out of KV. Prefill is the smaller half of this workload anyway
+      # (~750 prompt tokens against ~1300 generated), so trading KV for prefill
+      # batch is the wrong direction here.
+      - "--max-num-batched-tokens"
+      - "4096"
+      # At util 0.9 the engine sizes KV at 3.99 GiB on its own but its own boot
+      # log says 4.18 GiB fits ("Replace gpu_memory_utilization config with
+      # --kv-cache-memory=4484869632 to fully utilize gpu memory"). Claiming it
+      # explicitly measured 82,513 tokens against 78,905, +4.6%, for free.
+      # This value is tied to THIS model, THIS util, and a 16GB card. Re-read
+      # the boot log's "to fully utilize gpu memory" line before reusing it.
+      # Do NOT pair it with --skip-mm-profiling expecting more: that flag was
+      # measured a NO-OP here (78,799 tokens, peak activation unchanged at
+      # 0.5 GiB), because this text-only judge never made vLLM reserve a
+      # multimodal encoder budget in the first place.
+      - "--kv-cache-memory"
+      - "4484869632"
+      # THE SINGLE BIGGEST JUDGE SPEEDUP, measured 3.03x on steady-state
+      # throughput. TRITON_ATTN's default path is one fused
+      # kernel_unified_attention for prefill AND decode. A kernel built for
+      # variable-length prefill is inefficient at decode, where each sequence
+      # contributes one query token, and this workload is decode-heavy: ~1300
+      # generated tokens against ~750 prompt tokens. This flag swaps in
+      # separate prefill and decode kernels.
+      # Measured on the same 122-question persona-0 slice, judged from an empty
+      # checkpoint at 32 workers, so the work was identical:
+      #   unified kernel: 50 judged +217s, 50->100 227s, 122 in 629s
+      #   split kernels : 50 judged +103s, 50->100  75s, 122 in 239s
+      # Single-stream decode went 16.9 -> ~50 tok/s and aggregate 335-390 ->
+      # 795-900 tok/s. It does NOT change the KV cache size (82,513 tokens
+      # either way), so the win is kernel efficiency, not capacity.
+      # VERIFIED NOT TO CHANGE VERDICTS, which matters because a fast kernel
+      # can also be a silently wrong one. Judge sampling is temperature 1.0, so
+      # two runs disagree anyway; the same-kernel floor was measured to compare
+      # against. Split-vs-unified agreed 96.7-97.5% on answer accuracy where
+      # unified-vs-unified agreed 95.9%, with rank agreement 87.7-90.2% against
+      # a 90.2% floor, and mean AA 0.4877 vs 0.4754 (inside the 0.025 noise
+      # band). Judge_Method was identical in all three runs, with no
+      # rule_based fallback. Re-run that check if this flag ever changes.
+      - "--attention-config"
+      - '{"use_prefill_decode_attention": true}'
+      # Kept for BOOT TIME, not memory: it skips multimodal memory profiling
+      # for a judge that never sends an image or audio clip. Measured a memory
+      # no-op here (78,799 tokens against the baseline's 78,905, peak
+      # activation unchanged at 0.5 GiB) because nothing was reserving a
+      # multimodal encoder budget to begin with. It was present in the
+      # configuration that measured 239s, so it stays.
+      - "--skip-mm-profiling"
+      # Gemma 4 emits its thinking channel as <|channel>thought ... <channel|>
+      # (chat_template.jinja:187-189,236). Without this parser that text lands
+      # in `content` and every judge JSON parse fails. A prior run measured
+      # exactly that on unsloth/gemma-4-E2B-it, which never emitted the
+      # markers at all -- so VERIFY reasoning_content is non-empty on this
+      # checkpoint before trusting a score.
+      - "--reasoning-parser"
+      - "gemma4"
+      # This server judges, and the judge stage thinks (answer_env.sh
+      # bench_judge_env sets JUDGE_THINKING=1). The template gates the
+      # channel on enable_thinking, which defaults to FALSE
+      # (chat_template.jinja:180). The judge sends it per request as well;
+      # this default keeps a bare curl probe on the same path.
+      - "--default-chat-template-kwargs"
+      - '{"enable_thinking": true}'
+      # Google's suggested sampling for Gemma 4, which is also exactly what
+      # the checkpoint's own generation_config.json carries (temperature 1.0,
+      # top_k 64, top_p 0.95). Stated explicitly so the serving contract is
+      # readable here and does not depend on a file inside the checkpoint.
+      # Request-level params still win, and bench_judge_env sends the same
+      # three values per call (BENCH_JUDGE_TEMPERATURE / _TOP_P / _TOP_K).
+      - "--override-generation-config"
+      - '{"temperature": 1.0, "top_p": 0.95, "top_k": 64}'
+      # DO NOT add an attention-backend override here. The boot log reads
+      # "Gemma4 model has heterogeneous head dimensions (head_dim=256,
+      # global_head_dim=512). FA4 not available, forcing TRITON_ATTN backend."
+      # That is vLLM's own choice in Gemma4Config.verify_and_update_config
+      # (model_executor/models/config.py), and on this GPU it is the only
+      # correct option. Investigated 2026-07-29:
+      #   * The checkpoint runs 40 sliding-window layers at head_dim 256 and 8
+      #     full-attention layers at 512 (config.json layer_types, 5:1).
+      #   * is_fa_version_supported() on this card reports FA2 True, FA3 False,
+      #     FA4 False. Device capability is (12, 0), consumer Blackwell. FA4 is
+      #     the backend vLLM WANTS for this model, and it is not built for
+      #     SM120. FA2 exists but caps head_dim at 256, so it cannot serve the
+      #     512-dim group at all.
+      #   * FLASHINFER gates head_size support to compute capability 8.x-10.x,
+      #     so on 12.x it fails with "head_size not supported" (vllm#40677).
+      #   * Gemma4Unified needs mm_prefix (bidirectional attention over image
+      #     tokens). Only TRITON_ATTN, FLEX_ATTENTION, and the ROCm backends
+      #     implement it. Forcing FLASH_ATTN LOSES CORRECTNESS SILENTLY rather
+      #     than erroring.
+      #   * Routing only the 256-dim group to FA via attention_config
+      #     backend_per_kind was tried upstream and REJECTED: vllm#48114 was
+      #     closed by its author after Gemma4-12B showed 25% of GSM8K answers
+      #     changed (p<0.001) plus a 6.5-8.4% decode REGRESSION. So it is both
+      #     wrong and slower. Do not re-attempt it for a judge.
+      # The cost is real and measured: 16.9 tok/s single-stream decode. It is
+      # recovered by CONCURRENCY, not by a kernel swap -- see SCORE_WORKERS in
+      # score_with_judge.sh.
+      #
+      # Speculative decoding is also unavailable. This build does ship a
+      # `gemma4_mtp` speculative method, but unsloth/gemma-4-12b-it-NVFP4
+      # carries NO MTP weights: 1,389 tensors in model.safetensors, zero
+      # matching mtp/nextn/eh_proj/draft, and only model.language_model plus
+      # the vision/audio embedders. So --speculative-config '{"method":"mtp"}'
+      # cannot load.
+    environment:
+      HF_HUB_DISABLE_XET: "1"
+      VLLM_WSL2_ENABLE_PIN_MEMORY: "1"   # otherwise the v2 model runner dies: "UVA is not available"
+    volumes:
+      - "${HF_CACHE:-C:/Users/ollie/.cache/huggingface}:/root/.cache/huggingface"
+      - vllm_compile_cache:/root/.cache/vllm
+    # 8002, not 8000: vllm-gen owns 8000. Keeping them distinct means bringing
+    # vllm-gen back for the next generate stage cannot collide with a judge
+    # server left running. In-network callers use http://vllm-judge:8000/v1.
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 300s                 # 12B weights + compile on first boot
+
+  # ---- Hindsight: shared Postgres (pgvector) -------------------------------
+  # ONE tuned Postgres server serves all Hindsight shard-daemons. It replaces
+  # per-shard embedded pg0 clusters. Multiple daemons share it safely: schema
+  # migrations serialize on a pg advisory lock, and personas stay isolated by
+  # bank_id. This service uses the `run` profile, like the provider services.
+  # The RAM tuning below trades durability for speed on disposable scratch
+  # data. See docs/DECISIONS.md.
+  hindsight-pg:
+    image: pgvector/pgvector:pg18
+    container_name: hindsight-pg
+    profiles: ["run"]
+    environment:
+      POSTGRES_USER: "${HINDSIGHT_PG_USER:-hindsight}"
+      POSTGRES_PASSWORD: "${HINDSIGHT_PG_PASSWORD:-hindsight}"
+      POSTGRES_DB: "${HINDSIGHT_PG_DB:-hindsight}"
+    command:
+      - "postgres"
+      # max_connections: the worst case is NUM_SHARDS x per-daemon pool cap
+      # (16) plus admin headroom. 200 covers the 10-shard default.
+      - "-c"
+      - "max_connections=200"
+      # shared_buffers is modest. The working set is small, and the OS page
+      # cache handles the rest.
+      - "-c"
+      - "shared_buffers=768MB"
+      - "-c"
+      - "effective_cache_size=4GB"
+      # Speeds pgvector/GIN index builds on migration + autovacuum cleanup.
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      # Moderate: memory use is per sort-node, up to max_connections, but few
+      # concurrent heavy sorts happen here.
+      - "-c"
+      - "work_mem=16MB"
+      # Durability-for-speed: a crash loses only the last in-flight
+      # transactions (no corruption). This is acceptable because the data is
+      # re-creatable scratch.
+      - "-c"
+      - "synchronous_commit=off"
+      # No replication/PITR needed on a single-node scratch DB.
+      - "-c"
+      - "wal_level=minimal"
+      - "-c"
+      - "max_wal_senders=0"
+      # Avoids checkpoint storms under heavy retain/consolidation ingest.
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "checkpoint_timeout=15min"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      # SSD/ext4-on-WSL2: index scans are cheap, so favor them (pgvector recall).
+      - "-c"
+      - "random_page_cost=1.1"
+      # Many small queries run here. Parallel workers would only inflate the
+      # backend/RAM count.
+      - "-c"
+      - "max_parallel_workers_per_gather=0"
+      # Consolidation churns rows. Keep dead tuples down for stable recall latency.
+      - "-c"
+      - "autovacuum=on"
+    # Headroom for parallel index builds and vacuum DSM (the 64MB default can fail).
+    shm_size: "512mb"
+    volumes:
+      # PG18+ needs the mount at /var/lib/postgresql, not .../data (docker-library/postgres#37).
+      - hindsight_pg:/var/lib/postgresql
+      - ./hindsight-pg-init.sql:/docker-entrypoint-initdb.d/10-extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HINDSIGHT_PG_USER:-hindsight} -d ${HINDSIGHT_PG_DB:-hindsight}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  # ---- Hindsight: shared TEI reranker (optional, remote-rerank mode only) ---
+  # ONE TEI server reranks for all Hindsight daemons, over /rerank, in
+  # HINDSIGHT_RERANK_SOURCE=remote mode. It uses the same ms-marco
+  # cross-encoder as the local default. GPU image (120-1.9): sm_120 kernels
+  # are EXPERIMENTAL per HF docs. The fallback is a vllm-openai pooling
+  # instance behind HINDSIGHT_API_RERANKER_PROVIDER=cohere. See
+  # docs/DECISIONS.md.
+  # This service does NOT auto-start (it is absent from hindsight's
+  # depends_on). Start it explicitly:
+  #   docker compose up -d hindsight-rerank
+  hindsight-rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:120-1.9
+    container_name: hindsight-rerank
+    profiles: ["run"]
+    command:
+      - "--model-id"
+      - "${HINDSIGHT_RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
+      # TEI listens on :80 inside the container. The hindsight daemons reach
+      # it at http://hindsight-rerank:80 on the compose network (HINDSIGHT_RERANK_TEI_URL).
+      - "--port"
+      - "80"
+      # Sized to the client's HINDSIGHT_API_RERANKER_TEI_BATCH_SIZE=128. TEI's
+      # own default (32) 413s on the very first recall.
+      - "--max-client-batch-size"
+      - "128"
+      - "--payload-limit"
+      - "8000000"
+      # TEI has no --gpu-memory-utilization flag. The VRAM bound is CUDA
+      # context plus fp16 weights plus activations, sized by
+      # --max-batch-tokens below (8192 keeps activations small).
+      # --max-concurrent-requests is TEI's ADMISSION permit pool: queue
+      # depth, not VRAM (max-batch-tokens above is the VRAM bound). Two rules
+      # apply, both "stay at or above load, never below it". First, never cap
+      # below load: a 16-permit cap 429'd and killed a shard. Second, raise
+      # above the many-shard burst: TEI acquires one permit per rerank item,
+      # so a burst of shards' 128-doc batches can spike into the thousands.
+      # 4096 gives about 8x the observed peak. docs/TROUBLESHOOTING.md.
+      - "--max-concurrent-requests"
+      - "4096"
+      - "--dtype"
+      - "float16"
+      - "--max-batch-tokens"
+      - "8192"
+    environment:
+      HF_HUB_DISABLE_XET: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      # This is a dedicated named volume for TEI's model cache (/data), not
+      # the shared vLLM HF cache. TEI's /data layout differs from the hub
+      # cache, and the ms-marco model is only ~90MB, so a throwaway volume
+      # avoids any interference.
+      - hindsight_rerank_cache:/data
+    healthcheck:
+      # TEI exposes /health. The hindsight TEI client also probes /info on init.
+      test: ["CMD", "curl", "-fsS", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
+
+  # ---- Mnemosyne: full, verified run-service -------------------------------
+  mnemosyne:
+    <<: *provider-run
+    build:
+      context: ../..                     # repo root, since Dockerfile COPYs are repo-relative
+      dockerfile: benchmark/docker/Dockerfile.mnemosyne
+    image: memconflict-mnemosyne:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy       # do not start until models are actually serving
+      vllm-embed:
+        condition: service_healthy
+    environment:
+      # --- stage + run params -------------------------------------------------
+      STAGE: "${STAGE:-all}"             # generate | score | summarize | all
+      NUM_PERSONAS: "${NUM_PERSONAS:-30}"
+      NUM_SHARDS: "${NUM_SHARDS:-}"      # blank -> one shard per persona
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-24}"
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # --- features -----------------------------------------------------------
+      EXTRACT: "${EXTRACT:-0}"                                 # 1 -> --extract (LLM fact-extraction)
+      LIFECYCLE: "${LIFECYCLE:-0}"                             # 1 -> --lifecycle (arm B)
+      CANONICAL: "${CANONICAL:-0}"                             # 1 -> --canonical (arm C)
+      ORACLE: "${ORACLE:-0}"                                   # 1 -> --oracle (arm D)
+      # --- plugin-fidelity arms. These mirror the Hermes plugin's sync_turn()
+      # (see external/mnemosyne/integrations/hermes). They are mutually
+      # exclusive with the extraction arms above (entrypoint fails fast on
+      # invalid combos).
+      PLUGIN_CONFIG: "${PLUGIN_CONFIG:-off}"                   # off | user | both -> --plugin_config
+      # The featured (LOCKED) arm is PLUGIN_CONFIG=user with these two on. It is
+      # declared here so the featured run is launchable from a compose env
+      # file, not just `-e` flags.
+      PLUGIN_PREFETCH_OVERLAY: "${PLUGIN_PREFETCH_OVERLAY:-0}"  # 1 -> --plugin_prefetch_overlay (full plugin read path)
+      PLUGIN_AUTO_SLEEP: "${PLUGIN_AUTO_SLEEP:-0}"             # 1 -> --plugin_auto_sleep (plugin sleep cadence, drained)
+      # 1 -> --plugin_session_sleep: one sleep(force=True) after each session's
+      # ingest, before its questions. Consolidated rows are exempt from
+      # _trim_working_memory, so the shipped 168h WM TTL stops deleting the
+      # previous session's rows under clock-sync. Composes with PLUGIN_AUTO_SLEEP.
+      PLUGIN_SESSION_SLEEP: "${PLUGIN_SESSION_SLEEP:-0}"
+      USE_DATASET_TIME: "${USE_DATASET_TIME:-0}"               # 1 -> --use_dataset_time (backdate, no retirement)
+      MNEMOSYNE_TEMPORAL_WEIGHT: "${MNEMOSYNE_TEMPORAL_WEIGHT:-}"          # plugin arms; default 0.2
+      MNEMOSYNE_TEMPORAL_HALFLIFE: "${MNEMOSYNE_TEMPORAL_HALFLIFE:-}"      # plugin arms; default 48 (hours)
+      MNEMOSYNE_SYNC_TURN_USER_LIMIT: "${MNEMOSYNE_SYNC_TURN_USER_LIMIT:-}"          # default 500 chars
+      MNEMOSYNE_SYNC_TURN_ASSISTANT_LIMIT: "${MNEMOSYNE_SYNC_TURN_ASSISTANT_LIMIT:-}"  # default 800 chars
+      # Featured-arm tuning knobs (entrypoint supplies defaults: auto-sleep raises
+      # MAX_TOKENS to 2048, fact-recall off, threshold 50, reflect budget 3/session).
+      MNEMOSYNE_LLM_MAX_TOKENS: "${MNEMOSYNE_LLM_MAX_TOKENS:-}"            # auto-sleep default 2048 (≥2048 floor)
+      MNEMOSYNE_FACT_RECALL_ENABLED: "${MNEMOSYNE_FACT_RECALL_ENABLED:-}"  # plugin-default off
+      MNEMOSYNE_AUTO_SLEEP_THRESHOLD: "${MNEMOSYNE_AUTO_SLEEP_THRESHOLD:-}"          # default 50 (working-mem count)
+      MNEMOSYNE_REFLECT_MAX_CALLS_PER_SESSION: "${MNEMOSYNE_REFLECT_MAX_CALLS_PER_SESSION:-}"  # default 3
+      MNEMOSYNE_ENHANCED_RECALL: "${MNEMOSYNE_ENHANCED_RECALL:-0}"
+      THINKING: "${THINKING:-1}"                               # canonical: Gemma-4 thinking ON on answer gen (0 -> off)
+      # --- ML servers + models (default to the compose-network vLLM services) -
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      MNEMOSYNE_EMBEDDING_API_URL: "${MNEMOSYNE_EMBEDDING_API_URL:-http://vllm-embed:8000/v1}"
+      MNEMOSYNE_EMBEDDING_MODEL: "${MNEMOSYNE_EMBEDDING_MODEL:-gte-modernbert-base}"
+      MNEMOSYNE_EMBEDDING_DIM: "${MNEMOSYNE_EMBEDDING_DIM:-768}"
+      MNEMOSYNE_LLM_BASE_URL: "${MNEMOSYNE_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      MNEMOSYNE_LLM_MODEL: "${MNEMOSYNE_LLM_MODEL:-qwen3.5-4b}"
+      # --- perf: fast, durability-free SQLite for the throwaway persona DBs ---
+      BENCH_SQLITE_FAST: "${BENCH_SQLITE_FAST:-1}"
+      # --- optional overrides (default: outputs auto-tagged by feature) -------
+      RUN_TAG: "${RUN_TAG:-}"
+      # Container has no .git (build bakes source). Export GIT_SHA before
+      # `docker compose run`, or manifests record head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+      RESULTS_FILE: "${RESULTS_FILE:-}"
+    volumes:
+      # Live code and persisted outputs. Mnemosyne stays baked in the image.
+      - ../../benchmark:/app/benchmark
+      - ../../mnemosyne:/app/mnemosyne
+      # Named volume for high-churn I/O (per-persona SQLite DBs, shard rewrites).
+      # This avoids overlayfs copy-up. The entrypoint reaps its own per-tag
+      # subdirs at start.
+      - benchscratch:/scratch
+
+  # ---- Hindsight: full run-service (arms A/B/C) ----------------------------
+  # See CLAUDE.md for arm definitions, docs/BENCHMARK_MATRIX.md for results.
+  # Answer/judge default to the shared vllm-gen. Override OPENAI_BASE_URL +
+  # OPENROUTER_API_KEY for the OpenRouter path.
+  hindsight:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.hindsight
+    image: memconflict-hindsight:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      hindsight-pg:
+        condition: service_healthy       # shared DB must be migratable before daemons boot
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Answer + judge LLM (MemConflict llm_request). Shared vLLM by default.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # Hindsight-internal LLM (retain fact-extraction + recall query understanding).
+      HINDSIGHT_LLM_BASE_URL: "${HINDSIGHT_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      HINDSIGHT_LLM_MODEL: "${HINDSIGHT_LLM_MODEL:-qwen3.5-4b}"
+      # Extraction thinking OFF: thinking-on measured 384s/call vs ~14s off,
+      # with no quality gain (contract v2+). v1 gemma needed thinking on for
+      # grammar reasons, see CLAUDE.md. Strict schema ON: qwen3's empty
+      # <think> block lets grammar engage immediately. Judge/answer
+      # (OPENAI_*) are not affected.
+      HINDSIGHT_API_LLM_STRICT_SCHEMA: "${HINDSIGHT_API_LLM_STRICT_SCHEMA:-1}"
+      HINDSIGHT_API_LLM_EXTRA_BODY: "${HINDSIGHT_API_LLM_EXTRA_BODY:-{\"chat_template_kwargs\":{\"enable_thinking\":false}}}"
+      # 900s: package default (120s) and 480s both left a retain-timeout tail
+      # under multi-shard consolidation load. docs/TROUBLESHOOTING.md.
+      HINDSIGHT_API_LLM_TIMEOUT: "${HINDSIGHT_API_LLM_TIMEOUT:-900}"
+      # Adapter-side op-level HTTP timeout (Setup_Hindsight). Must exceed the
+      # server-side LLM timeout above so the client never gives up first.
+      HINDSIGHT_CLIENT_TIMEOUT: "${HINDSIGHT_CLIENT_TIMEOUT:-1500}"
+      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "${HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION:-false}"
+      # Hindsight's default cap (64000) exceeds vllm-gen's 32768 window, so
+      # the server would reject it. 8192 (user-raised from 4096 for the
+      # locked runs) is a RUNAWAY bound, not a capacity bound. The shipped
+      # 0.1 retain temperature repetition-loops about 3% of retains to the
+      # cap (measured over 269 calls). Legitimate completions max at 1,863
+      # tokens, so this is deep headroom. The 0.7 temperature below is the
+      # primary runaway mitigation. This larger cap lets a rare legitimately
+      # long extraction finish rather than truncate and retry. This value
+      # must stay above retain_chunk_size (3000). docs/TROUBLESHOOTING.md.
+      HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS: "${HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS:-8192}"
+      # BEST-EFFORT CONFIG: the shipped default 0.1 is the runaway trigger
+      # above. 0.7 is the Qwen3.5 card's non-thinking temperature.
+      # Hindsight's own consolidation path already inherits it (0 runaways
+      # in 185 calls, same run). Best-effort tuning rationale: CLAUDE.md.
+      # Evidence: docs/DECISIONS.md.
+      # This value is set explicitly, not as an omit sentinel, so manifests
+      # record a number instead of a sentinel whose meaning depends on
+      # server state.
+      HINDSIGHT_API_LLM_TEMPERATURE_RETAIN: "${HINDSIGHT_API_LLM_TEMPERATURE_RETAIN:-0.7}"
+      # Retry budget for malformed-JSON extraction attempts. The user lowered
+      # this from 7 to 3 for the locked runs: with the 0.7 retain
+      # temperature, runaways are rare, so a deep retry budget mostly buys
+      # latency on the few that do fail. This is the RETAIN-internal
+      # JSON-parse retry, INDEPENDENT of the shared answer-stage RETRY_TIMES
+      # (answer_env.sh) that rides out a vllm-gen restart.
+      HINDSIGHT_API_RETAIN_LLM_MAX_RETRIES: "${HINDSIGHT_API_RETAIN_LLM_MAX_RETRIES:-3}"
+      # --- Arm B/C consolidation bounds. Empty means the package default
+      # (auto-consolidation itself stays off via
+      # HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION above). Arms pass explicit
+      # values via `-e`. The entrypoint unsets these if left empty
+      # (from_env() only applies its default on UNSET, not on "").
+      # Consolidation's JSON rendering runs about 3x the raw token count
+      # (source facts + observations with source_memories), so budget
+      # accordingly. Recommended Arm B/C pair: SOURCE_FACTS_MAX_TOKENS=4096 /
+      # MAX_COMPLETION_TOKENS=4096 under the 32768 window.
+      # docs/TROUBLESHOOTING.md.
+      HINDSIGHT_API_CONSOLIDATION_RECALL_BUDGET: "${HINDSIGHT_API_CONSOLIDATION_RECALL_BUDGET:-}"
+      HINDSIGHT_API_CONSOLIDATION_SOURCE_FACTS_MAX_TOKENS: "${HINDSIGHT_API_CONSOLIDATION_SOURCE_FACTS_MAX_TOKENS:-}"
+      HINDSIGHT_API_CONSOLIDATION_MAX_COMPLETION_TOKENS: "${HINDSIGHT_API_CONSOLIDATION_MAX_COMPLETION_TOKENS:-}"
+      # --- Arm B/C adapter flags (eval_hindsight.py --prefer_observations /
+      # --wait_consolidation / --retain_granularity), plumbed by entrypoint.hindsight.sh.
+      PREFER_OBSERVATIONS: "${PREFER_OBSERVATIONS:-}"
+      WAIT_CONSOLIDATION: "${WAIT_CONSOLIDATION:-}"
+      RETAIN_GRANULARITY: "${RETAIN_GRANULARITY:-}"
+      # Plugin-default recall surface for arm C (observation-only). Unset ->
+      # no types filter -> all fact types (arms A/B). Empty list would mean ALL
+      # types in the API, so the adapter maps ""/all -> omit the kwarg.
+      RECALL_TYPES: "${RECALL_TYPES:-}"            # session|message|exchange|exchange_append
+      # FEATURED Arm C recall surface width: 1 -> --plugin_native_k (answer LLM +
+      # Retrieved_Memories = every recalled item, no top_k slice, matching the real
+      # Hermes hindsight plugin's full token-budgeted inject). Unset/0 -> top_k
+      # slice (minimal Arm A). Plumbed by entrypoint.hindsight.sh.
+      PLUGIN_NATIVE_RECALL: "${PLUGIN_NATIVE_RECALL:-}"
+      # Per-session consolidation drain-wait cap (s). Empty -> adapter default
+      # 450 (the old 300 timed out ~100% under Arm-B load. See the diagnosis).
+      CONSOLIDATION_WAIT_TIMEOUT_S: "${CONSOLIDATION_WAIT_TIMEOUT_S:-}"
+      # --- Storage backend: shared Postgres (the only supported mode) -----------
+      # Points the daemon at hindsight-pg above instead of a private per-shard
+      # pg0 cluster (removed 2026-07-22). The entrypoint hard-fails on any other value.
+      HINDSIGHT_PG_MODE: "${HINDSIGHT_PG_MODE:-shared}"        # shared (only supported mode)
+      HINDSIGHT_PG_HOST: "${HINDSIGHT_PG_HOST:-hindsight-pg}"
+      HINDSIGHT_PG_PORT: "${HINDSIGHT_PG_PORT:-5432}"
+      # Empty -> entrypoint derives a per-run db from RUN_TAG (hindsight_<tag>),
+      # isolating runs. A shared db once let one run's consolidation sweep
+      # reach another's banks (fixed 2026-07-20). Force a value only to
+      # share across runs deliberately. This does not affect hindsight-pg's
+      # own POSTGRES_DB.
+      HINDSIGHT_PG_DB: "${HINDSIGHT_PG_DB:-}"
+      HINDSIGHT_PG_USER: "${HINDSIGHT_PG_USER:-hindsight}"
+      HINDSIGHT_PG_PASSWORD: "${HINDSIGHT_PG_PASSWORD:-hindsight}"
+      # Empty -> entrypoint applies shared-mode defaults (min 2/max 16) so N
+      # shard-daemons never exhaust hindsight-pg's max_connections=200.
+      HINDSIGHT_API_DB_POOL_MIN_SIZE: "${HINDSIGHT_API_DB_POOL_MIN_SIZE:-}"
+      HINDSIGHT_API_DB_POOL_MAX_SIZE: "${HINDSIGHT_API_DB_POOL_MAX_SIZE:-}"
+      # --- Embedding source: shared vllm-embed (the only supported mode) --------
+      # Points at vllm-embed (gte-modernbert-base, dim 768). Per-daemon local
+      # embedding was removed 2026-07-22, and the entrypoint hard-fails on
+      # other values.
+      HINDSIGHT_EMBED_SOURCE: "${HINDSIGHT_EMBED_SOURCE:-remote}"
+      # --- Reranker source: shared TEI (the only supported mode) ----------------
+      # Points at hindsight-rerank below (same ms-marco model). Per-daemon
+      # local cross-encoder was removed 2026-07-22. It does NOT auto-start
+      # via depends_on: run `docker compose up -d hindsight-rerank` before
+      # remote-rerank runs.
+      HINDSIGHT_RERANK_SOURCE: "${HINDSIGHT_RERANK_SOURCE:-remote}"
+      HINDSIGHT_RERANK_TEI_URL: "${HINDSIGHT_RERANK_TEI_URL:-http://hindsight-rerank:80}"
+      # For the verified OpenRouter path instead: set OPENAI_BASE_URL / HINDSIGHT_LLM_BASE_URL
+      # to https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # Container has no .git (build bakes source). Export GIT_SHA before
+      # `docker compose run`, or manifests record head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../hindsight:/app/hindsight
+      # /home/bench ($HOME). Mostly vestigial since local/embedded modes were
+      # removed 2026-07-22 (remote/shared only). Safe to `docker volume rm`.
+      - hindsight_state:/home/bench
+
+  # ---- RetainDB: verified run-service (RULED OUT, kept for the record) ------
+  # @retaindb/local is a Node HTTP server that the Python adapter spawns. The
+  # only LLM in play is the shared answer/judge LLM. The npm package installs
+  # to /opt/retaindb_pkg, outside the bind-mounted retaindb/ dir, so live-edit
+  # mounting does not shadow node_modules.
+  # See CLAUDE.md for why this provider is ruled out.
+  retaindb:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.retaindb
+    image: memconflict-retaindb:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5). A default here would silently truncate
+      # full runs and disarm the row gate's dataset-derived question check.
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # Semantic embeddings by default (Xenova/all-MiniLM-L6-v2 in-process).
+      # `hash` is a zero-dep lexical fallback for smokes only, never a headline run.
+      RETAINDB_EMBEDDING_PROVIDER: "${RETAINDB_EMBEDDING_PROVIDER:-local-transformers}"
+      # @retaindb/local has no remote/OpenAI-compatible embedding provider, so it
+      # cannot use vllm-embed. Embeddings burn host CPU instead (budget shard
+      # count for CPU, not GPU). docs/TROUBLESHOOTING.md.
+      # HTTP client resilience (_retaindb_server.py): read timeout + bounded
+      # retries on timeout/conn-error/5xx. Empty = adapter defaults (300s, 4 retries).
+      RETAINDB_HTTP_TIMEOUT: "${RETAINDB_HTTP_TIMEOUT:-}"
+      RETAINDB_HTTP_RETRIES: "${RETAINDB_HTTP_RETRIES:-}"
+      # Ingestion cadence: exchange = plugin-faithful (one ingest_session per
+      # completed user/assistant exchange, mirroring the hermes-agent retaindb
+      # plugin's sync_turn). session|message remain for the legacy arms.
+      RETAIN_GRANULARITY: "${RETAIN_GRANULARITY:-exchange}"
+      # For the verified OpenRouter path: set OPENAI_BASE_URL to
+      # https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # Container has no .git (build bakes source). Export GIT_SHA before
+      # `docker compose run`, or manifests record head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../retaindb:/app/retaindb
+
+  # ---- mem0: shared central vector DB (qdrant) ------------------------------
+  # ONE qdrant server serves all mem0 shard-runs. It is the analog of
+  # hindsight-pg. mem0's default embedded qdrant is locked to one process, so
+  # every shard instead points here (MEM0_VECTOR_MODE=server) and gets its
+  # own collection (mem0_<run_tag>). Personas stay isolated by mem0 user_id.
+  # This service uses the `run` profile, like hindsight-pg. It has no
+  # container healthcheck (the qdrant image has no shell/curl).
+  # entrypoint.mem0.sh does a bounded readiness wait instead.
+  # The server is pinned to the newest stable (2026-07-17): mem0ai 2.x
+  # creates a sparse_vectors_config={"bm25": ... Modifier.IDF} collection,
+  # and pip resolves qdrant-client ~1.18. Matching the server removes the
+  # client/server skew warning and guarantees IDF sparse-vector support
+  # (needs server >=1.10). The old v1.12.4 pin predates the mem0 2.x port
+  # and was never exercised with sparse vectors. Note: each run tag now
+  # stores TWO collections (mem0_<tag> + mem0_<tag>_entities), so volume
+  # reclaim sizing doubles.
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    container_name: qdrant
+    profiles: ["run"]
+    environment:
+      # Keep qdrant's own telemetry off (parity with MEM0_TELEMETRY=False). The
+      # egress proxy would 4xx it anyway.
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    ports:
+      - "6333:6333"                      # REST (mem0's qdrant client default)
+      - "6334:6334"                      # gRPC
+    restart: unless-stopped
+
+  # ---- mem0: SCAFFOLD run-service -------------------------------------------
+  # NOT yet run in Docker (host smoke verified, see CLAUDE.md). mem0 is fully
+  # self-hosted: an internal LLM, an embedder, and an embedded qdrant. The
+  # LLM and embedder default to the shared vLLM stack. Override
+  # OPENAI_BASE_URL + OPENROUTER_API_KEY (and MEM0_LLM_BASE_URL) for the
+  # verified OpenRouter path instead.
+  mem0:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.mem0
+    image: memconflict-mem0:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
+        condition: service_healthy
+      qdrant:
+        condition: service_started       # readiness gated in-entrypoint (bounded qdrant-client wait)
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      # Persona shard range (sharded runs pass these via
+      # benchmark/docker/run_shards.sh). Empty -> the entrypoint covers
+      # [0, NUM_PERSONAS).
+      START_IDX: "${START_IDX:-}"
+      END_IDX: "${END_IDX:-}"
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5). A default here would silently truncate
+      # full runs and disarm the row gate's dataset-derived question check.
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Shared answer + judge LLM (MemConflict llm_request). Shared vLLM by default.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # mem0-internal LLM. Under the 2.0.14 pin this is fact extraction ONLY.
+      # The 0.1.x update-memory decision is gone from the product (verified
+      # 2026-07-28: memory/main.py:1165-1168 hardcodes event "ADD"). It
+      # defaults to the shared vllm-gen serving model per the best-effort
+      # ruling.
+      MEM0_LLM_PROVIDER: "${MEM0_LLM_PROVIDER:-openai}"
+      MEM0_LLM_MODEL: "${MEM0_LLM_MODEL:-qwen3.5-4b}"
+      MEM0_LLM_BASE_URL: "${MEM0_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      MEM0_LLM_TEMPERATURE: "${MEM0_LLM_TEMPERATURE:-0.7}"
+      MEM0_LLM_MAX_TOKENS: "${MEM0_LLM_MAX_TOKENS:-2048}"
+      # mem0 embedder: shared vllm-embed (OpenAI-compatible), same model/dim as
+      # the other providers. Set MEM0_EMBEDDER_PROVIDER=huggingface for a local
+      # sentence-transformers fallback (needs weights, and the image bakes them in).
+      MEM0_EMBEDDER_PROVIDER: "${MEM0_EMBEDDER_PROVIDER:-openai}"
+      MEM0_EMBEDDER_MODEL: "${MEM0_EMBEDDER_MODEL:-gte-modernbert-base}"
+      MEM0_EMBEDDER_BASE_URL: "${MEM0_EMBEDDER_BASE_URL:-http://vllm-embed:8000/v1}"
+      MEM0_EMBEDDER_DIMS: "${MEM0_EMBEDDER_DIMS:-768}"
+      # Per-input cap the adapter's embed shim sends as vLLM's
+      # truncate_prompt_tokens (eval_mem0.py:164). The adapter's own default is
+      # 512, the old bge-small-en-v1.5 input cap. -1 is vLLM's "truncate to
+      # the served model's max_model_len", so this tracks VLLM_EMBED_MAX_LEN
+      # (8192, gte-modernbert-base's native window) with no second knob.
+      MEM0_EMBED_TRUNCATE_TOKENS: "${MEM0_EMBED_TRUNCATE_TOKENS:--1}"
+      # Ingestion cadence: batch (one add per MEM0_ADD_BATCH_SIZE-message window,
+      # the MemConflict authors' eval_memzero.py cadence, default 8) | session
+      # (one add per whole session) | exchange (one add per user/assistant
+      # turn, finest conflict resolution). Omitted -> adapter default ('batch').
+      RETAIN_GRANULARITY: "${RETAIN_GRANULARITY:-batch}"
+      MEM0_ADD_BATCH_SIZE: "${MEM0_ADD_BATCH_SIZE:-8}"
+      # --- Vector store: central shared qdrant (default) vs per-run embedded -----
+      # server (default): every shard connects to qdrant above, with its own
+      # collection (mem0_<RUN_TAG>). This is the HINDSIGHT_PG_MODE=shared
+      # analog. embedded: per-process on-disk qdrant (host-smoke behavior,
+      # not shareable across shards).
+      MEM0_VECTOR_MODE: "${MEM0_VECTOR_MODE:-server}"
+      MEM0_QDRANT_HOST: "${MEM0_QDRANT_HOST:-qdrant}"
+      MEM0_QDRANT_PORT: "${MEM0_QDRANT_PORT:-6333}"
+      # Store vectors on disk in the server (persistent/mmap) vs in RAM. Benchmark
+      # scratch is disposable, so RAM (false) is fine and faster. Flip for durability.
+      MEM0_QDRANT_ON_DISK: "${MEM0_QDRANT_ON_DISK:-false}"
+      # Explicit collection override. Empty -> entrypoint derives mem0_<RUN_TAG>.
+      MEM0_COLLECTION: "${MEM0_COLLECTION:-}"
+      MEM0_TELEMETRY: "${MEM0_TELEMETRY:-False}"
+      # For the verified OpenRouter path: set OPENAI_BASE_URL / MEM0_LLM_BASE_URL
+      # to https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # No .git in the container. run_shards.sh exports GIT_SHA, otherwise head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../mem0:/app/mem0
+  # ---- Supermemory: shared central server (the "central DB" for sharded runs)
+  # ONE long-running server serves every `supermemory` shard that attaches to
+  # it (the hindsight-pg analog). Shards cannot safely co-own one embedded
+  # data dir, so personas are isolated by containerTag namespace instead.
+  # The bearer key persists in supermemory_data and is published to
+  # supermemory_shared/api_key. This service does not start under a bare
+  # `up`. It starts via the shard service's depends_on or `run_shards.sh`.
+  supermemory-server:
+    image: memconflict-supermemory:latest
+    container_name: supermemory-server
+    profiles: ["run"]
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.supermemory
+    entrypoint: ["bash", "/app/benchmark/docker/entrypoint.supermemory-server.sh"]
+    environment:
+      SUPERMEMORY_SERVER_PORT: "${SUPERMEMORY_SERVER_PORT:-8787}"
+      SUPERMEMORY_DATA_DIR: "/data/supermemory"
+      SUPERMEMORY_SHARED_DIR: "/shared"
+      # Internal EXTRACTION LLM (server-side only). It defaults to the shared
+      # answer endpoint/model. The fairness-locked answer/judge model lives
+      # in the SHARD containers, never here. Override SUPERMEMORY_LLM_* to
+      # decouple.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-${OPENROUTER_API_KEY:-local-vllm}}"
+      SUPERMEMORY_LLM_API_KEY: "${SUPERMEMORY_LLM_API_KEY:-}"
+      SUPERMEMORY_LLM_BASE_URL: "${SUPERMEMORY_LLM_BASE_URL:-}"
+      SUPERMEMORY_LLM_MODEL: "${SUPERMEMORY_LLM_MODEL:-}"
+      # Shared-embedder default (user ruling 2026-07-22): point at vllm-embed
+      # (gte-modernbert-base, 768d) for cross-provider embedder parity + GPU offload.
+      # Set PROVIDER=local (and blank the rest) to restore the vendor default
+      # (in-process Xenova bge-base 768d, CPU/ONNX). Store data is dimension-bound:
+      # never mix providers within one supermemory_data volume.
+      SUPERMEMORY_EMBEDDING_PROVIDER: "${SUPERMEMORY_EMBEDDING_PROVIDER:-openai}"
+      SUPERMEMORY_EMBEDDING_MODEL: "${SUPERMEMORY_EMBEDDING_MODEL:-gte-modernbert-base}"
+      SUPERMEMORY_EMBEDDING_DIMENSIONS: "${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}"
+      SUPERMEMORY_EMBEDDING_BASE_URL: "${SUPERMEMORY_EMBEDDING_BASE_URL:-http://vllm-embed:8000/v1}"
+      SUPERMEMORY_EMBEDDING_API_KEY: "${SUPERMEMORY_EMBEDDING_API_KEY:-local-vllm}"
+      # Shared server fed by N shards: raise ingest concurrency above the vendor
+      # default (2) so submissions extract in parallel (ceiling = extraction LLM).
+      # 10 = the featured-run value (user-raised from 6). The real ceiling is
+      # vllm-gen.
+      # THIS, NOT NUM_SHARDS, IS THE THROUGHPUT CAP: every shard posts into this
+      # one server's ingest worker pool, so N shards above this value only queue.
+      # Preferred profile (user, 2026-07-23): server pool 15, NUM_SHARDS 10. The
+      # pool slightly exceeds the container count, so workers never starve, and
+      # fewer client connections avoid the mid-run connection resets seen at 15
+      # shards. See run_shards.sh's supermemory case. A change takes effect only
+      # on a server RECREATE, not a restart.
+      SUPERMEMORY_INGEST_CONCURRENCY: "${SUPERMEMORY_INGEST_CONCURRENCY:-15}"
+      # Ingest-memory backpressure watermark: RSS growth ABOVE boot baseline at
+      # which the ingest pool pauses to 0. The name is misleading. It is NOT
+      # embedding-only.
+      # Vendor default 1gb throttled the pool to 0 for ~8-min stretches at
+      # 14-way ingest (measured RSS delta 1.4-3.5 GB vs the 1gb cap), idling
+      # vllm-gen. The binary prints "set SUPERMEMORY_EMBEDDING_RAM_LIMIT=ngb
+      # to change". RSS does not return to the allocator after a spike, so
+      # set this well above the ~3.5 GB observed peak. The host has ~23.6
+      # GiB. This applies only on server RECREATE.
+      # Docs: supermemory.ai/docs/self-hosting/configuration.
+      SUPERMEMORY_EMBEDDING_RAM_LIMIT: "${SUPERMEMORY_EMBEDDING_RAM_LIMIT:-8gb}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../supermemory:/app/supermemory
+      - supermemory_data:/data/supermemory        # persistent embedded store (stable key)
+      - supermemory_shared:/shared                 # key-file handoff to the shards
+    depends_on:
+      vllm-gen:
+        condition: service_healthy       # internal extraction LLM
+      vllm-embed:
+        condition: service_healthy       # shared remote embedder (default since 2026-07-22)
+    healthcheck:
+      # Ready = key-file published AND HTTP API listening. Matches only real
+      # HTTP codes (^[1-5][0-9]{2}$): curl prints "000" on connection refused,
+      # which would otherwise false-positive on a still-booting restart.
+      test: ["CMD-SHELL", "test -s /shared/api_key && curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${SUPERMEMORY_SERVER_PORT:-8787}/v3/documents/processing | grep -qE '^[1-5][0-9]{2}$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s        # first boot loads the embedding model
+    restart: unless-stopped
+
+  # ---- Supermemory: SECOND central server (optional two-server topology) ----
+  # This is a faithful copy of supermemory-server on its OWN port (8788),
+  # data volume (supermemory_data_b), and key-handoff volume
+  # (supermemory_shared_b). It is opt-in:
+  # `SUPERMEMORY_TWO_SERVERS=1 run_shards.sh supermemory <tag>` brings BOTH
+  # servers up and fans the shards across them (first half -> server A,
+  # second half -> B). This halves per-server connection concurrency and
+  # doubles ingest throughput. The one-server path never references this
+  # service, so it stays inert by default.
+  # Host RAM is tight (a ~8 GiB vLLM floor in a 23.6 GiB VM), so two servers
+  # must stay ~4 GiB each. run_shards defaults
+  # SUPERMEMORY_EMBEDDING_RAM_LIMIT=4gb in two-server mode (it reaches BOTH
+  # servers via this shared var). The single-server default stays 8gb.
+  supermemory-server-b:
+    image: memconflict-supermemory:latest
+    container_name: supermemory-server-b
+    profiles: ["run"]
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.supermemory
+    entrypoint: ["bash", "/app/benchmark/docker/entrypoint.supermemory-server.sh"]
+    environment:
+      SUPERMEMORY_SERVER_PORT: "${SUPERMEMORY_SERVER_PORT_B:-8788}"
+      SUPERMEMORY_DATA_DIR: "/data/supermemory"
+      SUPERMEMORY_SHARED_DIR: "/shared"
+      # Internal EXTRACTION LLM (server-side only), same wiring as server A.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-${OPENROUTER_API_KEY:-local-vllm}}"
+      SUPERMEMORY_LLM_API_KEY: "${SUPERMEMORY_LLM_API_KEY:-}"
+      SUPERMEMORY_LLM_BASE_URL: "${SUPERMEMORY_LLM_BASE_URL:-}"
+      SUPERMEMORY_LLM_MODEL: "${SUPERMEMORY_LLM_MODEL:-}"
+      # Shared embedder (gte-modernbert-base, 768d), same as server A.
+      SUPERMEMORY_EMBEDDING_PROVIDER: "${SUPERMEMORY_EMBEDDING_PROVIDER:-openai}"
+      SUPERMEMORY_EMBEDDING_MODEL: "${SUPERMEMORY_EMBEDDING_MODEL:-gte-modernbert-base}"
+      SUPERMEMORY_EMBEDDING_DIMENSIONS: "${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}"
+      SUPERMEMORY_EMBEDDING_BASE_URL: "${SUPERMEMORY_EMBEDDING_BASE_URL:-http://vllm-embed:8000/v1}"
+      SUPERMEMORY_EMBEDDING_API_KEY: "${SUPERMEMORY_EMBEDDING_API_KEY:-local-vllm}"
+      # Same ingest-pool default as server A. run_shards sets it once for both.
+      SUPERMEMORY_INGEST_CONCURRENCY: "${SUPERMEMORY_INGEST_CONCURRENCY:-15}"
+      # Backpressure watermark. Default 4gb (NOT 8gb) because two servers share the
+      # host: run_shards also exports 4gb in two-server mode so server A matches.
+      SUPERMEMORY_EMBEDDING_RAM_LIMIT: "${SUPERMEMORY_EMBEDDING_RAM_LIMIT:-4gb}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../supermemory:/app/supermemory
+      - supermemory_data_b:/data/supermemory      # server B's own persistent store
+      - supermemory_shared_b:/shared              # server B's own key-file handoff
+    depends_on:
+      vllm-gen:
+        condition: service_healthy       # internal extraction LLM
+      vllm-embed:
+        condition: service_healthy       # shared remote embedder
+    healthcheck:
+      # Same shape as server A, against server B's own port.
+      test: ["CMD-SHELL", "test -s /shared/api_key && curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${SUPERMEMORY_SERVER_PORT_B:-8788}/v3/documents/processing | grep -qE '^[1-5][0-9]{2}$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s        # first boot loads the embedding model
+    restart: unless-stopped
+
+  # ---- Supermemory (self-hosted): shard run-service ------------------------
+  # This is wiring-verified against a documented-API mock (real gpt-oss-120b
+  # answers + judge). The live server binary needs github.com release-asset
+  # egress at image-build time (Dockerfile.supermemory). The internal
+  # extraction LLM (SUPERMEMORY_LLM_*) stays separate from the shared
+  # answer+judge model. Ingestion is async (the adapter drains before
+  # answering). The default SUPERMEMORY_SERVER_MODE=shared attaches to
+  # supermemory-server above. `-e SUPERMEMORY_SERVER_MODE=spawn --no-deps`
+  # runs standalone instead.
+  supermemory:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.supermemory
+    image: memconflict-supermemory:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      supermemory-server:
+        condition: service_healthy       # shared central server must be READY before shards attach
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5, so a 1-session cap answers nothing).
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Server backend: shared (default) attaches to the central supermemory-server
+      # service (many shards, one store, isolated by containerTag namespace derived
+      # from RUN_TAG). spawn runs a standalone disposable server (pair with --no-deps).
+      SUPERMEMORY_SERVER_MODE: "${SUPERMEMORY_SERVER_MODE:-shared}"
+      SUPERMEMORY_SERVER_HOST: "${SUPERMEMORY_SERVER_HOST:-supermemory-server}"
+      SUPERMEMORY_SERVER_PORT: "${SUPERMEMORY_SERVER_PORT:-8787}"
+      SUPERMEMORY_SHARED_DIR: "/shared"
+      # Two-server topology (optional): a shard attaches to EITHER central server.
+      # Empty -> the entrypoint falls back to SUPERMEMORY_SERVER_HOST:PORT + /shared,
+      # so a one-server run is unchanged. run_shards.sh sets these per shard when
+      # SUPERMEMORY_TWO_SERVERS=1 (server B: http://supermemory-server-b:8788 +
+      # /shared_b/api_key, read from the supermemory_shared_b volume mounted below).
+      SUPERMEMORY_ATTACH_URL: "${SUPERMEMORY_ATTACH_URL:-}"
+      SUPERMEMORY_KEY_FILE: "${SUPERMEMORY_KEY_FILE:-}"
+      # Per-run containerTag namespace (shared mode). Empty -> derived from RUN_TAG
+      # (trailing _s<k> stripped) so all shards of a run share one prefix.
+      SUPERMEMORY_CONTAINER_NAMESPACE: "${SUPERMEMORY_CONTAINER_NAMESPACE:-}"
+      # Shared answer + judge LLM (fairness-locked, identical across providers).
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      THINKING: "${THINKING:-1}"
+      # Supermemory's INTERNAL extraction LLM (server-side). It defaults to
+      # the shared answer endpoint/model. Override it to drive extraction
+      # with a different (e.g. local) model without touching the
+      # fairness-locked answer/judge config.
+      SUPERMEMORY_LLM_API_KEY: "${SUPERMEMORY_LLM_API_KEY:-}"
+      SUPERMEMORY_LLM_BASE_URL: "${SUPERMEMORY_LLM_BASE_URL:-}"
+      SUPERMEMORY_LLM_MODEL: "${SUPERMEMORY_LLM_MODEL:-}"
+      # Local ONNX embeddings by default (Xenova/bge-base-en-v1.5, 768d, no key).
+      # Shared-embedder default (user ruling 2026-07-22): point at vllm-embed
+      # (gte-modernbert-base, 768d) for cross-provider embedder parity + GPU offload.
+      # Set PROVIDER=local (and blank the rest) to restore the vendor default
+      # (in-process Xenova bge-base 768d, CPU/ONNX). Store data is dimension-bound:
+      # never mix providers within one supermemory_data volume.
+      SUPERMEMORY_EMBEDDING_PROVIDER: "${SUPERMEMORY_EMBEDDING_PROVIDER:-openai}"
+      SUPERMEMORY_EMBEDDING_MODEL: "${SUPERMEMORY_EMBEDDING_MODEL:-gte-modernbert-base}"
+      SUPERMEMORY_EMBEDDING_DIMENSIONS: "${SUPERMEMORY_EMBEDDING_DIMENSIONS:-768}"
+      SUPERMEMORY_EMBEDDING_BASE_URL: "${SUPERMEMORY_EMBEDDING_BASE_URL:-http://vllm-embed:8000/v1}"
+      SUPERMEMORY_EMBEDDING_API_KEY: "${SUPERMEMORY_EMBEDDING_API_KEY:-local-vllm}"
+      # FEATURED plugin-faithful path (default empty -> minimal arm: /v3/documents +
+      # /v4/search). Featured run sets these to conversations + profile to drive the
+      # exact endpoints the Hermes plugin uses (ingest one full-session doc via
+      # /v4/conversations. Auto-recall via /v4/profile injects the static/dynamic
+      # profile block into the answer context). See docs/BENCHMARK_MATRIX.md.
+      SUPERMEMORY_INGEST_ENDPOINT: "${SUPERMEMORY_INGEST_ENDPOINT:-}"       # documents | conversations
+      SUPERMEMORY_RECALL_ENDPOINT: "${SUPERMEMORY_RECALL_ENDPOINT:-}"       # search | profile
+      # Recall: /v4/search hybrid (the Hermes supermemory plugin default). See docs/BENCHMARK_MATRIX.md.
+      SUPERMEMORY_SEARCH_MODE: "${SUPERMEMORY_SEARCH_MODE:-hybrid}"
+      SUPERMEMORY_SEARCH_THRESHOLD: "${SUPERMEMORY_SEARCH_THRESHOLD:-}"
+      SUPERMEMORY_RERANK: "${SUPERMEMORY_RERANK:-0}"
+      SUPERMEMORY_REWRITE_QUERY: "${SUPERMEMORY_REWRITE_QUERY:-0}"
+      SUPERMEMORY_DOCUMENTS_ARM: "${SUPERMEMORY_DOCUMENTS_ARM:-0}"
+      # Ingest cadence: session (default, full-session document = the plugin's
+      # session-end ingest) | exchange (per-turn capture) | message.
+      SUPERMEMORY_RETAIN_GRANULARITY: "${SUPERMEMORY_RETAIN_GRANULARITY:-session}"
+      # Max seconds to wait for a session's async ingest to drain before answering.
+      SUPERMEMORY_DRAIN_TIMEOUT: "${SUPERMEMORY_DRAIN_TIMEOUT:-600}"
+      # Headline-run guard (mirrors Hindsight's STRICT_QUALITY_RUN): abort the shard
+      # nonzero on any session's drain TIMEOUT or extraction FAILURE instead of
+      # answering against missing memories. Off by default (smokes tolerate it).
+      SUPERMEMORY_STRICT_QUALITY: "${SUPERMEMORY_STRICT_QUALITY:-0}"
+      # Clock-sync arms only (ignored without BENCH_CLOCKSYNC=1): restart the
+      # SPAWNED server once per session, on the same data dir, after the clock
+      # steps and before the session's first document. Without it, node-cron
+      # v4 replays every missed 30-minute slot of the fake-time jump at ~0.46
+      # MB per slot and the host OOMs (docs/TROUBLESHOOTING.md, Provider: Supermemory).
+      # Default 1 under clock-sync; set 0 to reproduce the OOM.
+      SUPERMEMORY_RESPAWN_PER_SESSION: "${SUPERMEMORY_RESPAWN_PER_SESSION:-1}"
+      # Ingest-memory backpressure watermark for SPAWN mode (the shard spawns
+      # its own server. _supermemory_server.py passes host env through).
+      # Shared-mode runs get this from the supermemory-server service
+      # instead. See that service for the full rationale (vendor default
+      # 1gb idled the GPU).
+      SUPERMEMORY_EMBEDDING_RAM_LIMIT: "${SUPERMEMORY_EMBEDDING_RAM_LIMIT:-8gb}"
+      # For the verified OpenRouter path: set OPENAI_BASE_URL to
+      # https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # Container has no .git. Export GIT_SHA before `docker compose run`, or
+      # let a launcher set it.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../supermemory:/app/supermemory
+      # Read the central server's published bearer key (shared mode). ro: shards
+      # only consume it. Harmless in spawn mode (unused). Both server keys are
+      # mounted so a shard can attach to EITHER in the two-server topology. The
+      # entrypoint reads /shared/api_key (server A) or /shared_b/api_key (server B)
+      # per SUPERMEMORY_KEY_FILE. supermemory_shared_b is empty and unused in a
+      # one-server run.
+      - supermemory_shared:/shared:ro
+      - supermemory_shared_b:/shared_b:ro
+  # ---- RetainDB SERVER edition: run-service (SCAFFOLD) ----------------------
+  # This benchmarks @retaindb/server (Postgres/pgvector + LLM extraction), a
+  # distinct product from the retaindb/ LOCAL edition above (see CLAUDE.md).
+  # It is built from the external/RetainDB submodule at image-build time.
+  # The entrypoint derives a per-run db on the shared hindsight-pg, migrates
+  # it, launches the server, then dispatches STAGE (the Python adapter is
+  # attach-only). Embeddings default to remote (embed_proxy.py fronts
+  # vllm-embed and right-pads the 768-dim vectors to 1024 for RetainDB's
+  # pinned vector(1024) schema; zero-padding is rank-preserving).
+  # Sharding follows hindsight's model: one container/server/db per shard.
+  retaindb-server:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.retaindb-server
+    image: memconflict-retaindb-server:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
+        condition: service_started       # contract embedder (gte-modernbert-base) for remote mode
+      hindsight-pg:
+        condition: service_healthy       # shared DB must be reachable before migrate
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      START_IDX: "${START_IDX:-0}"
+      END_IDX: "${END_IDX:-}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5). A default here would silently truncate full
+      # runs and disarm the row gate's dataset-derived question check.
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Answer + judge LLM (MemConflict llm_request) AND the server's extraction
+      # LLM both point at the shared vLLM by default. The SDK needs a non-empty key.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # RetainDB extraction model. EXTRACTOR_MODEL is the READ var. The vendor
+      # .env.example's EXTRACTION_MODEL is a DEAD no-op. Empty -> entrypoint
+      # defaults it to OPENAI_MODEL.
+      EXTRACTOR_MODEL: "${EXTRACTOR_MODEL:-}"
+      # remote (default, CONTRACT): vllm-embed via embed_proxy.py, which
+      # zero-pads the 768-dim vectors to RetainDB's pinned vector(1024)
+      # schema (rank-preserving). local: OFF-CONTRACT debug knob (different
+      # embedder, not comparable). docs/DECISIONS.md.
+      RETAINDB_EMBEDDING_MODE: "${RETAINDB_EMBEDDING_MODE:-remote}"
+      EMBED_PROXY_UPSTREAM_BASE_URL: "${EMBED_PROXY_UPSTREAM_BASE_URL:-http://vllm-embed:8000/v1}"
+      EMBED_PROXY_UPSTREAM_MODEL: "${EMBED_PROXY_UPSTREAM_MODEL:-gte-modernbert-base}"
+      # Vendor knob (search.ts:31, default 120). 120ms assumes in-process
+      # embeddings; the contract runs a shared REMOTE embedder, whose round
+      # trip alone can exceed it under load. In the ft27rdb smoke 117 of 122
+      # searches degraded to fast mode (raw cosine order, no graph traversal,
+      # no temporal scoring) on this budget. 2000 covers remote latency
+      # without masking a hang; best-effort configuration under ruling 2.
+      MEMORY_SEARCH_POST_VECTOR_BUDGET_MS: "${MEMORY_SEARCH_POST_VECTOR_BUDGET_MS:-2000}"
+      # Server search profile (fast|balanced|quality). Empty -> server default (fast).
+      RETAINDB_SERVER_PROFILE: "${RETAINDB_SERVER_PROFILE:-}"
+      # Recall overlay arm: 1 (default) = plugin-faithful compaction | 0 = raw rows
+      # (diagnostic, never a headline number).
+      RETAINDB_SERVER_PLUGIN_OVERLAY: "${RETAINDB_SERVER_PLUGIN_OVERLAY:-1}"
+      # ---- Featured vs minimal config knobs -------------------------------
+      # MINIMAL (defaults): session-granularity ingest, scheduler OFF, fast search.
+      # FEATURED: -e PRESET=retaindb_server_featured_clocksync (presets.sh),
+      #   which is exactly these six:
+      #     BENCH_CLOCKSYNC=1
+      #     RETAINDB_RETAIN_GRANULARITY=exchange
+      #     DISABLE_SCHEDULER=false
+      #     RETAINDB_SERVER_WAIT_LIFECYCLE=1
+      #     RETAINDB_SERVER_PROFILE=quality
+      #     RETAINDB_SERVER_PROMOTION_MODE=user_specific_legacy
+      #   The last two are not optional: without promotion_mode nothing is
+      #   SESSION-scoped for the scheduler to promote, and without BENCH_CLOCKSYNC
+      #   the lifecycle runs against the real clock. An explicit -e still wins.
+      # Ingest cadence: session (minimal) | exchange (featured, plugin sync_turn
+      # per-turn cadence: one ingest/session call per user/assistant exchange).
+      RETAINDB_RETAIN_GRANULARITY: "${RETAINDB_RETAIN_GRANULARITY:-}"
+      # Scheduler: true (minimal, no consolidation) | false (featured, the server's
+      # 60s scheduler runs session-lifecycle: SESSION->USER promotion + summaries).
+      DISABLE_SCHEDULER: "${DISABLE_SCHEDULER:-}"
+      # Featured lifecycle barrier: 1 = after each session's ingest, block until the
+      # scheduler has processed it (poll Postgres for the summary/promotion rows)
+      # before the next session. Only meaningful with DISABLE_SCHEDULER=false.
+      RETAINDB_SERVER_WAIT_LIFECYCLE: "${RETAINDB_SERVER_WAIT_LIFECYCLE:-}"
+      # Scope-inference pipeline (vendor-exposed per-request field): empty ->
+      # server default (session_state_v1, ordinary facts -> USER/PROJECT, no SESSION
+      # rows) | user_specific_legacy (mid-confidence facts -> SESSION scope, so the
+      # lifecycle scheduler above actually has rows to promote/summarize).
+      RETAINDB_SERVER_PROMOTION_MODE: "${RETAINDB_SERVER_PROMOTION_MODE:-}"
+      # Lifecycle timing. The 60s scheduler tick is hardcoded (not configurable).
+      # These two ARE read by the server and are lowered from their 2h / 10min
+      # defaults so lifecycle fires on the next tick. Empty -> entrypoint defaults
+      # (5000 / 1000). The adapter reads the barrier wait bound and poll interval.
+      SESSION_INACTIVITY_THRESHOLD_MS: "${SESSION_INACTIVITY_THRESHOLD_MS:-}"
+      SESSION_LIFECYCLE_INTERVAL_MS: "${SESSION_LIFECYCLE_INTERVAL_MS:-}"
+      RETAINDB_LIFECYCLE_WAIT_TIMEOUT_S: "${RETAINDB_LIFECYCLE_WAIT_TIMEOUT_S:-}"
+      RETAINDB_LIFECYCLE_POLL_INTERVAL_S: "${RETAINDB_LIFECYCLE_POLL_INTERVAL_S:-}"
+      # Bypasses the server's two search caches (patch 0004): the semantic cache
+      # leaks across scopes and the exact-key cache is question_date-blind, both
+      # corrupting benchmark retrieval. Default true. false restores vendor caching.
+      RETAINDB_DISABLE_SEARCH_CACHE: "${RETAINDB_DISABLE_SEARCH_CACHE:-}"
+      # Optional Bearer key if the server is started with RETAINDB_API_KEY set
+      # (default unset = open access on the loopback in-container server).
+      RETAINDB_API_KEY: "${RETAINDB_API_KEY:-}"
+      # Shared Postgres connection (reuses the hindsight-pg service). The
+      # entrypoint derives a per-run db retaindb_<sanitized-RUN_TAG> and creates it.
+      RETAINDB_SERVER_PG_HOST: "${RETAINDB_SERVER_PG_HOST:-hindsight-pg}"
+      RETAINDB_SERVER_PG_PORT: "${RETAINDB_SERVER_PG_PORT:-5432}"
+      RETAINDB_SERVER_PG_USER: "${RETAINDB_SERVER_PG_USER:-hindsight}"
+      RETAINDB_SERVER_PG_PASSWORD: "${RETAINDB_SERVER_PG_PASSWORD:-hindsight}"
+      RETAINDB_SERVER_PG_DB: "${RETAINDB_SERVER_PG_DB:-}"       # empty -> derived from RUN_TAG
+      # For the verified OpenRouter path instead: set OPENAI_BASE_URL to
+      # https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # Container has no .git. Export GIT_SHA before `docker compose run`, or
+      # the manifest records head_sha: null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../retaindb_server:/app/retaindb_server
+      # Named volume for the in-process BGE model cache, so a local-mode run does
+      # not re-download the model each `--rm` run. Unused in the default remote mode.
+      - retaindb_server_models:/opt/retaindb_models
+
+  # ---- Honcho: shared Postgres (the "central DB" for honcho-api/-deriver) --
+  # ONE cluster serves honcho-api and honcho-deriver in the default shared
+  # topology (the hindsight-pg analog). pgvector/pgvector:pg16 matches the
+  # in-container PGDG Postgres Dockerfile.honcho bakes for the spawn arm
+  # under BENCH_CLOCKSYNC=1, so the two paths behave identically.
+  # POSTGRES_HOST_AUTH_METHOD=trust matches external/honcho's own
+  # docker-compose.yml.example (loopback-only network here, so trust auth
+  # costs nothing and needs no secret to plumb through three services).
+  honcho-pg:
+    image: pgvector/pgvector:pg16
+    container_name: honcho-pg
+    profiles: ["run"]
+    environment:
+      POSTGRES_USER: "${HONCHO_PG_USER:-postgres}"
+      POSTGRES_PASSWORD: "${HONCHO_PG_PASSWORD:-postgres}"
+      POSTGRES_DB: "${HONCHO_PG_DB:-postgres}"
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - honcho_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HONCHO_PG_USER:-postgres} -d ${HONCHO_PG_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---- Honcho: one-shot DB init (provision + vector-dimension fix) --------
+  # external/honcho's own migrations hardcode vector(1536) (the OpenAI
+  # text-embedding-3-small default) in the two embedding tables
+  # (`documents`, `message_embeddings` -- src/startup/embedding_validator.py:38,
+  # the same pair scripts/configure_embeddings.py fixes). src/models.py sizes
+  # vector columns from EMBEDDING_VECTOR_DIMENSIONS, but that only governs a
+  # fresh create_all(); `scripts/provision_db.py` only ever replays the
+  # migrations, so a non-1536 embedder (gte-modernbert-base, 768d) needs both
+  # columns widened by hand, once, right after provisioning and before
+  # honcho-api/-deriver do any embedding write -- both refuse to boot on a
+  # mismatch (embedding_validator.py's startup check).
+  #
+  # This mirrors honcho/_honcho_server.py's own apply_embedding_dim_fix(): run
+  # provision_db.py, then the VENDOR repair path
+  # `scripts/configure_embeddings.py --yes` (drops the two HNSW indexes,
+  # ALTERs both columns, recreates the indexes), falling back to raw SQL only
+  # if that script is missing or fails. The adapter's own comment on that
+  # function says a compose topology that provisions the database outside the
+  # adapter process must call the same fix itself, which is what this step
+  # does for the shared honcho-api/honcho-deriver topology (the adapter's
+  # spawn-mode arm runs the equivalent fix in-process instead).
+  # Runs once per honcho-pg lifetime: safe to re-run (every step here is
+  # idempotent), and honcho-api/-deriver wait on it via
+  # service_completed_successfully.
+  honcho-db-init:
+    build:
+      context: ../../external/honcho
+      dockerfile: Dockerfile
+    image: memconflict-honcho-server:latest
+    profiles: ["run"]
+    depends_on:
+      honcho-pg:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URI: "${HONCHO_PG_DSN:-postgresql+psycopg://postgres:postgres@honcho-pg:5432/postgres}"
+      DB_SCHEMA: "${HONCHO_DB_SCHEMA:-public}"
+      EMBEDDING_VECTOR_DIMENSIONS: "${HONCHO_EMBEDDER_DIMS:-768}"
+    entrypoint: ["/app/.venv/bin/python", "-c"]
+    command:
+      - |
+        import os, subprocess, sys
+
+        def log(msg):
+            print(f"[honcho-db-init] {msg}", flush=True)
+
+        log("provisioning (alembic upgrade head; CREATE EXTENSION vector)")
+        subprocess.run(
+            ["/app/.venv/bin/python", "scripts/provision_db.py"],
+            check=True, cwd="/app",
+        )
+
+        dim = os.environ.get("EMBEDDING_VECTOR_DIMENSIONS", "768")
+        schema = os.environ.get("DB_SCHEMA", "public")
+        # psycopg.connect() takes a plain postgresql:// DSN; DB_CONNECTION_URI
+        # carries the SQLAlchemy "+psycopg" driver suffix for the app's own
+        # engine, which psycopg itself does not understand.
+        dsn = os.environ["DB_CONNECTION_URI"].replace(
+            "postgresql+psycopg://", "postgresql://", 1
+        )
+
+        def fallback_sql():
+            # Generic sweep: every `vector` column, found by introspection
+            # instead of naming tables, so it survives a migration rename.
+            # Broader than the vendor script's fixed (documents,
+            # message_embeddings) pair, which is fine here -- both run only
+            # on a freshly provisioned, EMPTY database, so a plain ALTER
+            # COLUMN TYPE needs no USING cast and REINDEX TABLE has nothing
+            # populated to rebuild.
+            import psycopg
+            log("fallback: widening vector columns via information_schema")
+            with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT table_schema, table_name, column_name "
+                    "FROM information_schema.columns WHERE udt_name = 'vector'"
+                )
+                touched = set()
+                for tschema, table, col in cur.fetchall():
+                    cur.execute(
+                        f'ALTER TABLE "{tschema}"."{table}" '
+                        f'ALTER COLUMN "{col}" TYPE vector({dim})'
+                    )
+                    touched.add((tschema, table))
+                    log(f"{tschema}.{table}.{col} -> vector({dim})")
+                for tschema, table in touched:
+                    cur.execute(f'REINDEX TABLE "{tschema}"."{table}"')
+                    log(f"reindexed {tschema}.{table}")
+
+        script = "scripts/configure_embeddings.py"
+        if os.path.isfile(os.path.join("/app", script)):
+            log(f"widening vector columns to {dim}d via vendor {script} --yes")
+            proc = subprocess.run(
+                ["/app/.venv/bin/python", script, "--yes"],
+                cwd="/app", capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                log(f"{script} failed (rc={proc.returncode}); falling back to raw SQL")
+                log(proc.stdout[-1500:]); log(proc.stderr[-1500:])
+                fallback_sql()
+            else:
+                log(proc.stdout[-1500:])
+        else:
+            log(f"{script} not found in this checkout; using raw-SQL fallback")
+            fallback_sql()
+        log("dim-fix complete")
+    restart: "no"
+
+  # ---- Honcho: API server (shared topology) ---------------------------------
+  # Builds external/honcho's OWN Dockerfile + docker/entrypoint.sh (provision,
+  # then `fastapi run`), the same image external/honcho/docker-compose.yml.example
+  # ships. This is the server side the `honcho` run-service attaches to over
+  # REST when HONCHO_SERVER_MODE=shared (the compose default).
+  honcho-api:
+    build:
+      context: ../../external/honcho
+      dockerfile: Dockerfile
+    image: memconflict-honcho-server:latest
+    container_name: honcho-api
+    profiles: ["run"]
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    depends_on:
+      honcho-pg:
+        condition: service_healthy
+      honcho-db-init:
+        condition: service_completed_successfully
+    environment: &honcho_server_env
+      DB_CONNECTION_URI: "${HONCHO_PG_DSN:-postgresql+psycopg://postgres:postgres@honcho-pg:5432/postgres}"
+      # Redis is optional; the benchmark never needs cross-process caching.
+      CACHE_ENABLED: "false"
+      # No Hermes-plugin auth in this harness (matches every other provider's
+      # internal server -- no key surface to configure or leak).
+      AUTH_USE_AUTH: "false"
+      # Process incoming messages immediately instead of batching to a token
+      # threshold (DERIVER_REPRESENTATION_BATCH_MAX_TOKENS, default 1024), so
+      # the adapter's post-ingest drain (h.queue_status polling) converges in
+      # bounded time per session instead of waiting on a batch that never
+      # crosses threshold.
+      DERIVER_FLUSH_ENABLED: "${HONCHO_DERIVER_FLUSH:-1}"
+      DERIVER_WORKERS: "${HONCHO_DERIVER_WORKERS:-4}"
+      # The vendor jitters the deriver's first poll by up to 30s so
+      # co-started instances do not poll in lockstep. This shared topology
+      # has exactly one deriver, so that jitter is pure added latency on
+      # every drain.
+      DERIVER_POLLING_STARTUP_JITTER_SECONDS: "${HONCHO_DERIVER_STARTUP_JITTER_S:-0.0}"
+      # Session summaries and the dialectic's peer-card section. The minimal
+      # arm (HONCHO_RECALL_MODE=conclusions) turns both off, because
+      # conclusions-only recall never reads either. pydantic bool parsing
+      # accepts "1"/"0" the same as "true"/"false", so this forwards the
+      # 0/1-style outer knob straight through.
+      SUMMARY_ENABLED: "${HONCHO_SUMMARY_ENABLED:-1}"
+      PEER_CARD_ENABLED: "${HONCHO_PEER_CARD_ENABLED:-1}"
+      # Every internal-LLM transport reads this one key.
+      LLM_OPENAI_API_KEY: "${HONCHO_LLM_API_KEY:-${OPENROUTER_API_KEY:-local-vllm}}"
+      # --- Deriver (fact extraction) model ---
+      DERIVER_MODEL_CONFIG__TRANSPORT: openai
+      DERIVER_MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      # Deriver-only output cap and sampling penalty, matching spawn mode
+      # (honcho/_honcho_server.py). No other role gets either: the deriver is
+      # the one that repetition-loops on qwen3.5-4b (18 of 79 documents pinned
+      # at the old 8192-token cap, mean 41,189 chars, unique-sentence ratio
+      # 0.181, measured on smoke hn_smkft_p0). vLLM cannot serve
+      # presence_penalty as a default, so 1.5 -- the Qwen card value the
+      # answer role uses -- has to be sent per request.
+      DERIVER_MODEL_CONFIG__MAX_OUTPUT_TOKENS: "${HONCHO_DERIVER_MAX_OUTPUT_TOKENS:-2048}"
+      DERIVER_MODEL_CONFIG__PRESENCE_PENALTY: "${HONCHO_DERIVER_PRESENCE_PENALTY:-1.5}"
+      # frequency_penalty scales with repeat count (presence is flat and
+      # saturates after one occurrence), so it is the only forwarded knob
+      # that a sustained verbatim loop cannot out-wait. 5.2% of smkft3's
+      # stored documents were loops WITH presence 1.5 active.
+      DERIVER_MODEL_CONFIG__FREQUENCY_PENALTY: "${HONCHO_DERIVER_FREQUENCY_PENALTY:-0.3}"
+      # --- Dialectic (recall/chat) model, all five reasoning levels -> one model ---
+      # Input bound first: the vendor default 100000 assumes a 128k window,
+      # vllm-gen serves 32768, and Honcho truncates to this value instead of
+      # erroring only when it is set below the window (spawn mode sets the
+      # identical var through honcho/_honcho_server.py).
+      DIALECTIC_MAX_INPUT_TOKENS: "${HONCHO_DIALECTIC_MAX_INPUT_TOKENS:-20000}"
+      DIALECTIC_LEVELS__minimal__MODEL_CONFIG__TRANSPORT: openai
+      DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DIALECTIC_LEVELS__minimal__MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      DIALECTIC_LEVELS__low__MODEL_CONFIG__TRANSPORT: openai
+      DIALECTIC_LEVELS__low__MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DIALECTIC_LEVELS__low__MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      DIALECTIC_LEVELS__medium__MODEL_CONFIG__TRANSPORT: openai
+      DIALECTIC_LEVELS__medium__MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DIALECTIC_LEVELS__medium__MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      DIALECTIC_LEVELS__high__MODEL_CONFIG__TRANSPORT: openai
+      DIALECTIC_LEVELS__high__MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DIALECTIC_LEVELS__high__MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      DIALECTIC_LEVELS__max__MODEL_CONFIG__TRANSPORT: openai
+      DIALECTIC_LEVELS__max__MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DIALECTIC_LEVELS__max__MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      # --- Session summary model ---
+      SUMMARY_MODEL_CONFIG__TRANSPORT: openai
+      SUMMARY_MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      SUMMARY_MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      # --- Dream (consolidation) specialist models ---
+      # DREAM_ENABLED (bool) is deliberately NOT set here: an unconfigured
+      # `${VAR:-}` reaches the container as a present, empty string, and
+      # pydantic-settings bool parsing rejects "" (the same trap
+      # unset_empty_env_with_prefix works around for HINDSIGHT_API_* in the
+      # entrypoint scripts -- this service has no such guard, because it runs
+      # the vendor's own entrypoint.sh, not ours). Dreams idle-trigger after
+      # 60 minutes (vendor default DREAM_IDLE_TIMEOUT_MINUTES), so they do
+      # not fire mid-run at this run-service's scale. Override with an
+      # explicit `-e DREAM_ENABLED=false` on this service if a long-idle
+      # smoke needs them suppressed.
+      DREAM_DEDUCTION_MODEL_CONFIG__TRANSPORT: openai
+      DREAM_DEDUCTION_MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DREAM_DEDUCTION_MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      DREAM_INDUCTION_MODEL_CONFIG__TRANSPORT: openai
+      DREAM_INDUCTION_MODEL_CONFIG__MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      DREAM_INDUCTION_MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      # --- Embedder: shared vllm-embed (gte-modernbert-base, 768d) ---
+      EMBEDDING_MODEL_CONFIG__TRANSPORT: openai
+      EMBEDDING_MODEL_CONFIG__MODEL: "${HONCHO_EMBEDDER_MODEL:-gte-modernbert-base}"
+      EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL: "${HONCHO_EMBEDDER_BASE_URL:-http://vllm-embed:8000/v1}"
+      EMBEDDING_MODEL_CONFIG__OVERRIDES__API_KEY: "${HONCHO_EMBEDDER_API_KEY:-local-vllm}"
+      # never stops the OpenAI client sending `dimensions=`. gte-modernbert-base
+      # has one fixed output width, so never is simply correct: vLLM returns 400
+      # for a `dimensions=` request against this model. The pydantic-settings
+      # default is "auto", which sends it. honcho/_honcho_server.py's spawn-mode
+      # child_env defaults the same knob the same way.
+      EMBEDDING_MODEL_CONFIG__DIMENSIONS_MODE: "${HONCHO_EMBEDDER_DIMENSIONS_MODE:-never}"
+      EMBEDDING_VECTOR_DIMENSIONS: "${HONCHO_EMBEDDER_DIMS:-768}"
+      HF_HUB_DISABLE_XET: "1"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---- Honcho: deriver worker (shared topology) ------------------------------
+  # Same image and internal-LLM/embedder wiring as honcho-api (the anchor
+  # merge below), because DeriverSettings/DialecticSettings/etc. are read by
+  # BOTH processes independently -- there is no shared runtime state besides
+  # Postgres. `python -m src.deriver` is external/honcho's own entry point
+  # (external/honcho/docker-compose.yml.example uses the identical command).
+  honcho-deriver:
+    build:
+      context: ../../external/honcho
+      dockerfile: Dockerfile
+    image: memconflict-honcho-server:latest
+    container_name: honcho-deriver
+    profiles: ["run"]
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    depends_on:
+      honcho-pg:
+        condition: service_healthy
+      honcho-db-init:
+        condition: service_completed_successfully
+      honcho-api:
+        condition: service_healthy
+    environment:
+      <<: *honcho_server_env
+    restart: unless-stopped
+
+  # ---- Honcho (self-hosted): run-service -------------------------------------
+  # This is a SCAFFOLD (honcho/eval_honcho.py is under active development).
+  # The default HONCHO_SERVER_MODE=shared attaches to honcho-api above (the
+  # central "DB" this run-service depends_on unconditionally, mirroring how
+  # the Supermemory run-service always depends_on supermemory-server even
+  # though `-e HONCHO_SERVER_MODE=spawn --no-deps` skips the attach at
+  # runtime -- compose has no conditional depends_on).
+  honcho:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.honcho
+    image: memconflict-honcho:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
+        condition: service_healthy
+      honcho-api:
+        condition: service_healthy
+      honcho-deriver:
+        condition: service_started
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      # Persona shard range (sharded runs pass these via
+      # benchmark/docker/run_shards.sh). Empty -> the entrypoint covers
+      # [0, NUM_PERSONAS).
+      START_IDX: "${START_IDX:-}"
+      END_IDX: "${END_IDX:-}"
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5). A default here would silently truncate
+      # full runs and disarm the row gate's dataset-derived question check.
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Shared answer + judge LLM (MemConflict llm_request). Shared vLLM by default.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # --- Server backend: shared (default) attaches to honcho-api/-deriver ---
+      # above. spawn runs a standalone disposable server+deriver (+Postgres
+      # under BENCH_CLOCKSYNC=1) inside this container instead; pair it with
+      # `--no-deps` so depends_on does not drag the shared services up.
+      HONCHO_SERVER_MODE: "${HONCHO_SERVER_MODE:-shared}"
+      HONCHO_BASE_URL: "${HONCHO_BASE_URL:-}"
+      # Spawn mode only (honcho/_honcho_server.py). Empty -> the adapter's own
+      # defaults: HONCHO_SERVER_DIR falls back to its DEFAULT_SERVER_DIR,
+      # HONCHO_SERVER_PYTHON to <server_dir>/.venv/bin/python if present,
+      # HONCHO_RUN_DIR to .honcho_runs/<RUN_TAG> next to the adapter,
+      # HONCHO_PG_DB to honcho_<sanitized RUN_TAG>, HONCHO_PG_DROP_DB to true
+      # (drop-and-recreate on the HONCHO_PG_CREATE_DB=1 path).
+      HONCHO_SERVER_DIR: "${HONCHO_SERVER_DIR:-}"
+      HONCHO_SERVER_PORT: "${HONCHO_SERVER_PORT:-}"
+      HONCHO_SERVER_PYTHON: "${HONCHO_SERVER_PYTHON:-}"
+      HONCHO_RUN_DIR: "${HONCHO_RUN_DIR:-}"
+      HONCHO_PG_DSN: "${HONCHO_PG_DSN:-}"
+      HONCHO_PG_CREATE_DB: "${HONCHO_PG_CREATE_DB:-}"
+      HONCHO_PG_DB: "${HONCHO_PG_DB:-}"
+      HONCHO_PG_DROP_DB: "${HONCHO_PG_DROP_DB:-}"
+      HONCHO_DB_SCHEMA: "${HONCHO_DB_SCHEMA:-public}"
+      HONCHO_API_KEY: "${HONCHO_API_KEY:-local}"
+      # CRITICAL: the adapter calls the dialectic inline over this same SDK
+      # timeout (eval_honcho.py --timeout). The plugin's own default (30s)
+      # silently empties the dialectic layer of hybrid recall on slow
+      # serving -- the call just times out and that section drops, with no
+      # error surfaced to the run. 300 matches the harness's own answer-path
+      # request timeout (answer_env.sh's RETRY_TIMES/WAIT_TIME_* budget is
+      # separate and larger; this is the per-call SDK timeout).
+      HONCHO_TIMEOUT: "${HONCHO_TIMEOUT:-300}"
+      # Per-persona workspace isolation (design decision 1). Empty -> the
+      # entrypoint derives "hermes_<sanitized RUN_TAG>_" the same way
+      # entrypoint.mem0.sh derives MEM0_COLLECTION.
+      HONCHO_WORKSPACE_PREFIX: "${HONCHO_WORKSPACE_PREFIX:-}"
+      HONCHO_USER_PEER_ID: "${HONCHO_USER_PEER_ID:-user}"
+      HONCHO_AI_PEER_ID: "${HONCHO_AI_PEER_ID:-hermes}"
+      HONCHO_OBSERVATION_MODE: "${HONCHO_OBSERVATION_MODE:-directional}"
+      # Recall arm: hybrid (default, headline; plugin recallMode default) |
+      # base (session summary + representation + card only) | dialectic
+      # (peer.chat only) | search (diagnostic h.search, never a headline
+      # number) | conclusions (minimal arm: raw stored conclusions, no
+      # summary/peer-card section -- pair with HONCHO_SUMMARY_ENABLED=0 and
+      # HONCHO_PEER_CARD_ENABLED=0, since the server would otherwise still
+      # spend LLM calls building sections this arm never reads).
+      HONCHO_RECALL_MODE: "${HONCHO_RECALL_MODE:-hybrid}"
+      # Session summaries and the dialectic's peer-card section (server-side
+      # SUMMARY_ENABLED / PEER_CARD_ENABLED, spawn mode only -- shared mode's
+      # honcho-api/-deriver above read the identical outer var independently).
+      HONCHO_SUMMARY_ENABLED: "${HONCHO_SUMMARY_ENABLED:-1}"
+      HONCHO_PEER_CARD_ENABLED: "${HONCHO_PEER_CARD_ENABLED:-1}"
+      HONCHO_DIALECTIC_REASONING_LEVEL: "${HONCHO_DIALECTIC_REASONING_LEVEL:-low}"
+      HONCHO_DIALECTIC_DYNAMIC: "${HONCHO_DIALECTIC_DYNAMIC:-1}"
+      HONCHO_REASONING_LEVEL_CAP: "${HONCHO_REASONING_LEVEL_CAP:-high}"
+      HONCHO_DIALECTIC_MAX_CHARS: "${HONCHO_DIALECTIC_MAX_CHARS:-600}"
+      HONCHO_DIALECTIC_MAX_INPUT_CHARS: "${HONCHO_DIALECTIC_MAX_INPUT_CHARS:-10000}"
+      HONCHO_MESSAGE_MAX_CHARS: "${HONCHO_MESSAGE_MAX_CHARS:-25000}"
+      HONCHO_SEARCH_LIMIT: "${HONCHO_SEARCH_LIMIT:-10}"
+      # Token budget for the assembled injection block (the plugin's own
+      # `contextTokens`, plugins/memory/honcho/README.md:53,296). The plugin
+      # SHIPS it unset, which _parse_context_tokens reads as uncapped, and
+      # uncapped does not fit this contract: vllm-gen serves a 32768-token
+      # window, the shared answer budget takes 16384 of it, and an uncapped
+      # hybrid block measured 254k tokens at persona 0 session 5. 8192 is half
+      # the remaining budget, so the system prompt and the question always
+      # fit. 0 restores the shipped uncapped behavior. Ruling 2:
+      # vendor-exposed knob, plugin default OFF.
+      HONCHO_CONTEXT_TOKENS: "${HONCHO_CONTEXT_TOKENS:-8192}"
+      # Vendor-exposed capability the plugin itself does not use (the
+      # plugin-faithful temporal path is BENCH_CLOCKSYNC instead). See design
+      # decision 2.
+      HONCHO_SEND_CREATED_AT: "${HONCHO_SEND_CREATED_AT:-0}"
+      # Deviation from the plugin (mandatory, design decision 3): drain the
+      # deriver queue after each session's ingest, so recall never races a
+      # fire-and-forget plugin write. Raise the timeout on a slow shared
+      # server under multi-shard load; the poll interval is cheap to lower.
+      HONCHO_DRAIN_TIMEOUT_S: "${HONCHO_DRAIN_TIMEOUT_S:-1800}"
+      HONCHO_DRAIN_POLL_S: "${HONCHO_DRAIN_POLL_S:-2.0}"
+      # --- Honcho-internal LLM + embedder (spawn mode only; shared mode's ---
+      # honcho-api/-deriver above read the identical vars independently).
+      HONCHO_DERIVER_FLUSH: "${HONCHO_DERIVER_FLUSH:-1}"
+      HONCHO_DERIVER_WORKERS: "${HONCHO_DERIVER_WORKERS:-4}"
+      # The vendor's own polling defaults (1.0 / 30.0 / 30.0 idle-sleep, max
+      # interval, and startup jitter). The adapter lowers the startup jitter
+      # to 0.0 unconditionally: it exists so co-started peer instances do not
+      # poll in lockstep, and a dedicated single deriver has no peers to
+      # collide with -- that jitter is pure added latency on every drain.
+      HONCHO_DERIVER_POLL_S: "${HONCHO_DERIVER_POLL_S:-1.0}"
+      HONCHO_DERIVER_POLL_MAX_S: "${HONCHO_DERIVER_POLL_MAX_S:-2.0}"
+      HONCHO_DERIVER_STARTUP_JITTER_S: "${HONCHO_DERIVER_STARTUP_JITTER_S:-0.0}"
+      HONCHO_LLM_MODEL: "${HONCHO_LLM_MODEL:-qwen3.5-4b}"
+      HONCHO_LLM_BASE_URL: "${HONCHO_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      HONCHO_LLM_API_KEY: "${HONCHO_LLM_API_KEY:-}"
+      # Output budget for every internal role (deriver, dialectic, summary,
+      # dream). Reasoning-effort passthrough is left EMPTY for qwen3.5-4b (a
+      # non-reasoning-model default): a reasoning model at its own default
+      # effort can spend the whole budget on reasoning and return empty
+      # content (observed on gpt-oss-20b: the deriver's observation call
+      # burned 8192 tokens on reasoning alone and emitted zero observations).
+      # unset_empty_env_with_prefix strips this back to a true absence when
+      # left empty, so the internal LLM's own default applies.
+      HONCHO_LLM_MAX_OUTPUT_TOKENS: "${HONCHO_LLM_MAX_OUTPUT_TOKENS:-8192}"
+      HONCHO_LLM_THINKING_EFFORT: "${HONCHO_LLM_THINKING_EFFORT:-}"
+      # DERIVER-ONLY output cap and sampling penalty. The knob above feeds
+      # every role; these two overlay the deriver alone, because the deriver
+      # is the role that runs away: smoke hn_smkft_p0 stored 18 of 79
+      # documents pinned at the old 8192-token cap, mean 41,189 chars,
+      # unique-sentence ratio 0.181. Real observations have a median length of
+      # 241 chars, so 2048 cannot truncate a healthy one. presence_penalty
+      # 1.5 is the Qwen card value the answer role already uses; vLLM's
+      # get_diff_sampling_param does not allowlist presence_penalty, so a
+      # provider-internal call gets it only when it is sent per request.
+      HONCHO_DERIVER_MAX_OUTPUT_TOKENS: "${HONCHO_DERIVER_MAX_OUTPUT_TOKENS:-2048}"
+      HONCHO_DERIVER_PRESENCE_PENALTY: "${HONCHO_DERIVER_PRESENCE_PENALTY:-1.5}"
+      HONCHO_DERIVER_FREQUENCY_PENALTY: "${HONCHO_DERIVER_FREQUENCY_PENALTY:-0.3}"
+      # `DIALECTIC_MAX_INPUT_TOKENS`. The vendor default 100000 assumes a
+      # 128k-window model; vllm-gen serves 32768. Honcho truncates the
+      # message list to this bound instead of erroring, but only when it is
+      # set below the window. Left at the default, every dialectic call 400s
+      # once the representation grows past ~24,577 tokens — measured from
+      # persona 0 session 5 on smoke hn_smkft2_p0, which emptied the hybrid
+      # arm's whole layer 2. 20000 leaves the 8192-token answer room, with
+      # margin for the tiktoken-against-Qwen count disagreement.
+      HONCHO_DIALECTIC_MAX_INPUT_TOKENS: "${HONCHO_DIALECTIC_MAX_INPUT_TOKENS:-20000}"
+      HONCHO_EMBEDDER_MODEL: "${HONCHO_EMBEDDER_MODEL:-gte-modernbert-base}"
+      HONCHO_EMBEDDER_BASE_URL: "${HONCHO_EMBEDDER_BASE_URL:-http://vllm-embed:8000/v1}"
+      HONCHO_EMBEDDER_API_KEY: "${HONCHO_EMBEDDER_API_KEY:-local-vllm}"
+      HONCHO_EMBEDDER_DIMS: "${HONCHO_EMBEDDER_DIMS:-768}"
+      # never stops the OpenAI client sending `dimensions=` (see honcho-api's
+      # identical comment above); this is the spawn-mode / adapter-facing
+      # copy of the same knob.
+      HONCHO_EMBEDDER_DIMENSIONS_MODE: "${HONCHO_EMBEDDER_DIMENSIONS_MODE:-never}"
+      # The adapter auto-starts a local fastembed shim ONLY when
+      # HONCHO_EMBEDDER_BASE_URL is empty (host smokes with no vllm-embed).
+      # Docker always sets HONCHO_EMBEDDER_BASE_URL above, so this is inert
+      # here either way; set explicitly so the manifest records the intent.
+      HONCHO_EMBED_SHIM: "0"
+      # Truncating embed proxy (spawn generate only, honcho/embed_proxy.py).
+      # vllm-embed answers 400 to any input above the served window, and
+      # Honcho's representation path (simple_batch_embed) neither chunks nor
+      # length-checks, so one long observation drops the whole save. The proxy
+      # adds truncate_prompt_tokens=-1 to every upstream embedding request,
+      # which tells vLLM to cut at the served model's own max_model_len. It
+      # therefore self-adjusts to whatever vllm-embed serves. At the current
+      # 32768-token window it is a near-inert backstop, and it stays enabled.
+      # Set 0 to measure the unproxied failure rate again.
+      HONCHO_EMBED_PROXY: "${HONCHO_EMBED_PROXY:-}"
+      HONCHO_EMBED_PROXY_PORT: "${HONCHO_EMBED_PROXY_PORT:-}"
+      # Passthrough only (spawn mode); see honcho-api's DREAM_ENABLED comment
+      # above for why this is not force-set to a literal value.
+      HONCHO_DREAM_ENABLED: "${HONCHO_DREAM_ENABLED:-}"
+      # Featured arm only (user ruling 2026-07-31): 1 = after each session's
+      # ingest+drain, manually POST /v3/workspaces/{id}/schedule_dream per
+      # observed pair and drain again, instead of waiting for the idle-based
+      # scheduler. Dataset sessions are days apart, so the real 60-minute idle
+      # trigger would never fire inside a benchmark run.
+      HONCHO_DREAM_AFTER_SESSION: "${HONCHO_DREAM_AFTER_SESSION:-0}"
+      # For the verified OpenRouter path: set OPENAI_BASE_URL / HONCHO_LLM_BASE_URL
+      # to https://openrouter.ai/api/v1 and supply OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # No .git in the container. run_shards.sh exports GIT_SHA, otherwise head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../honcho:/app/honcho
+  # ---- OpenViking: SCAFFOLD run-service --------------------------------------
+  # NOT yet run (adapter under active development). One pip distribution ships
+  # the `openviking-server` console script AND its storage: an AGFS content
+  # store plus a local vector index under one workspace directory. So there is
+  # no database sidecar and no central service to attach to -- the adapter
+  # spawns its own server per container (OPENVIKING_SERVER_MODE=spawn) and the
+  # workspace lives under openviking/.openviking_runs/ (gitignored). The
+  # internal chat model and the embedder default to the shared vLLM stack.
+  openviking:
+    <<: *provider-run
+    build:
+      context: ../..
+      dockerfile: benchmark/docker/Dockerfile.openviking
+    image: memconflict-openviking:latest
+    depends_on:
+      vllm-gen:
+        condition: service_healthy
+      vllm-embed:
+        condition: service_healthy
+    environment:
+      STAGE: "${STAGE:-all}"
+      NUM_PERSONAS: "${NUM_PERSONAS:-1}"                       # scaffold default: 1-persona smoke
+      # Persona shard range (sharded runs pass these via
+      # benchmark/docker/run_shards.sh). Empty -> the entrypoint covers
+      # [0, NUM_PERSONAS).
+      START_IDX: "${START_IDX:-}"
+      END_IDX: "${END_IDX:-}"
+      TOP_K: "${TOP_K:-5}"
+      SCORE_WORKERS: "${SCORE_WORKERS:-8}"
+      # No default cap. Smokes must OPT IN with -e MAX_SESSIONS=6 (persona 0's
+      # questions start in session 5). A default here would silently truncate
+      # full runs and disarm the row gate's dataset-derived question check.
+      MAX_SESSIONS: "${MAX_SESSIONS:-}"
+      MAX_QUESTIONS_PER_SESSION: "${MAX_QUESTIONS_PER_SESSION:-}"
+      # Shared answer + judge LLM (MemConflict llm_request). Shared vLLM by default.
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-qwen3.5-4b}"
+      # Canonical answer decoding: thinking ON by default (identical to every
+      # provider). The entrypoint routes it through benchmark/docker/answer_env.sh.
+      THINKING: "${THINKING:-1}"
+      # --- Server backend: spawn (default) vs attach ------------------------
+      # spawn runs a disposable server inside this container. shared attaches
+      # to an operator-run server at OPENVIKING_ENDPOINT (health check only);
+      # a workspace holds a one-process `.openviking.pid` lock, so no compose
+      # service serves that mode. The entrypoint exits 2 on shared+clocksync.
+      OPENVIKING_SERVER_MODE: "${OPENVIKING_SERVER_MODE:-spawn}"
+      OPENVIKING_ENDPOINT: "${OPENVIKING_ENDPOINT:-}"
+      OPENVIKING_SERVER_BIN: "${OPENVIKING_SERVER_BIN:-}"
+      # 0 asks the OS for an ephemeral port, so co-tenant shards never collide.
+      OPENVIKING_SERVER_PORT: "${OPENVIKING_SERVER_PORT:-0}"
+      # Empty -> the adapter derives .openviking_runs/<sanitized RUN_TAG> for
+      # the run dir (ov.conf + server.log) and <run dir>/data for the workspace,
+      # both next to the adapter (bind-mounted, gitignored).
+      OPENVIKING_RUN_DIR: "${OPENVIKING_RUN_DIR:-}"
+      OPENVIKING_WORKSPACE: "${OPENVIKING_WORKSPACE:-}"
+      # Dev auth mode on loopback: identity comes from the X-OpenViking-Account
+      # / X-OpenViking-User headers, and an empty key selects it. Persona
+      # isolation IS the user header (the vendor's own LoCoMo harness pattern).
+      OPENVIKING_API_KEY: "${OPENVIKING_API_KEY:-}"
+      OPENVIKING_ACCOUNT: "${OPENVIKING_ACCOUNT:-default}"
+      # Empty -> the entrypoint derives "<sanitized RUN_TAG>_", so two waves on
+      # one attached server never share a user id.
+      OPENVIKING_USER_PREFIX: "${OPENVIKING_USER_PREFIX:-}"
+      # X-OpenViking-Actor-Peer header and the assistant messages' peer_id.
+      OPENVIKING_AGENT: "${OPENVIKING_AGENT:-hermes}"
+      # Recall arm: prefetch (headline, featured; the plugin's own read
+      # surface: a once-per-session profile/preferences/entities block plus the
+      # /search/search entries, plugin_native_recall=True so no top-K slice) |
+      # search (minimal: /search/search only, sliced to the shared top-K) |
+      # find (diagnostic: deterministic /search/find, no internal LLM call).
+      OPENVIKING_RECALL_MODE: "${OPENVIKING_RECALL_MODE:-prefetch}"
+      # Ingest cadence: exchange (default, the plugin's sync_turn cadence -- one
+      # messages/batch POST per user+assistant exchange) | session (one POST per
+      # session, chunked at the server's 100-message batch cap).
+      RETAIN_GRANULARITY: "${RETAIN_GRANULARITY:-exchange}"
+      OPENVIKING_RETAIN_GRANULARITY: "${OPENVIKING_RETAIN_GRANULARITY:-}"
+      # Plugin recall knobs at the plugin's own defaults.
+      OPENVIKING_RECALL_LIMIT: "${OPENVIKING_RECALL_LIMIT:-6}"
+      OPENVIKING_RECALL_SCORE_THRESHOLD: "${OPENVIKING_RECALL_SCORE_THRESHOLD:-0.15}"
+      OPENVIKING_RECALL_MAX_INJECTED_CHARS: "${OPENVIKING_RECALL_MAX_INJECTED_CHARS:-4000}"
+      OPENVIKING_PROFILE_TOKEN_BUDGET: "${OPENVIKING_PROFILE_TOKEN_BUDGET:-6000}"
+      OPENVIKING_RECALL_FULL_READ_LIMIT: "${OPENVIKING_RECALL_FULL_READ_LIMIT:-2}"
+      OPENVIKING_RECALL_PREFER_ABSTRACT: "${OPENVIKING_RECALL_PREFER_ABSTRACT:-0}"
+      OPENVIKING_RECALL_RESOURCES: "${OPENVIKING_RECALL_RESOURCES:-0}"
+      # DEVIATION from the plugin's 4.0/3.0 second budget (docs/DECISIONS.md).
+      # The plugin joins prefetch on a background thread and drops what has not
+      # arrived; the adapter calls recall INLINE, so the plugin budget empties
+      # recall under benchmark serving latency. 60 is the plugin's own clamp
+      # maximum (the HONCHO_TIMEOUT=300 precedent).
+      OPENVIKING_RECALL_TIMEOUT_SECONDS: "${OPENVIKING_RECALL_TIMEOUT_SECONDS:-60}"
+      OPENVIKING_RECALL_REQUEST_TIMEOUT_SECONDS: "${OPENVIKING_RECALL_REQUEST_TIMEOUT_SECONDS:-30}"
+      # Vendor-exposed capability the plugin itself does not use: the plugin
+      # sends no created_at, so the plugin-faithful temporal path is
+      # BENCH_CLOCKSYNC instead.
+      OPENVIKING_SEND_CREATED_AT: "${OPENVIKING_SEND_CREATED_AT:-0}"
+      # Deviation from the plugin's fire-and-forget commit (honcho and
+      # supermemory precedent): poll the commit task, then POST /system/wait,
+      # so recall never runs against a persona whose memory state is unknown.
+      OPENVIKING_DRAIN_TIMEOUT_S: "${OPENVIKING_DRAIN_TIMEOUT_S:-1800}"
+      OPENVIKING_DRAIN_POLL_S: "${OPENVIKING_DRAIN_POLL_S:-1.0}"
+      # httpx per-request timeout for the ingest and drain calls. It bounds a
+      # commit POST, which extraction makes long. Recall has its own two
+      # budgets above.
+      OPENVIKING_HTTP_TIMEOUT: "${OPENVIKING_HTTP_TIMEOUT:-600}"
+      # --- OpenViking-internal chat model (`vlm` in ov.conf) ----------------
+      # Memory extraction at /sessions/{sid}/commit and the search-intent
+      # analysis of /search/search. Defaults to the shared serving model per
+      # the best-effort ruling. `vlm.max_concurrent` ships at 64; one shard at
+      # 64 in-flight extraction calls starves the vllm-gen that also serves the
+      # answer role, so 8 bounds the per-shard extraction load.
+      OPENVIKING_LLM_MODEL: "${OPENVIKING_LLM_MODEL:-qwen3.5-4b}"
+      OPENVIKING_LLM_BASE_URL: "${OPENVIKING_LLM_BASE_URL:-http://vllm-gen:8000/v1}"
+      OPENVIKING_LLM_API_KEY: "${OPENVIKING_LLM_API_KEY:-}"
+      OPENVIKING_LLM_MAX_TOKENS: "${OPENVIKING_LLM_MAX_TOKENS:-4096}"
+      OPENVIKING_LLM_TEMPERATURE: "${OPENVIKING_LLM_TEMPERATURE:-0.0}"
+      OPENVIKING_LLM_MAX_CONCURRENT: "${OPENVIKING_LLM_MAX_CONCURRENT:-8}"
+      OPENVIKING_LLM_TIMEOUT: "${OPENVIKING_LLM_TIMEOUT:-600}"
+      # JSON merged into vlm.extra_request_body. Empty for local qwen3.5-4b;
+      # the OpenRouter gpt-oss-20b path needs {"reasoning": {"effort": "low"}}
+      # (docs/TROUBLESHOOTING.md "Provider: OpenViking").
+      OPENVIKING_LLM_EXTRA_BODY: "${OPENVIKING_LLM_EXTRA_BODY:-}"
+      # --- OpenViking embedder (`embedding.dense` in ov.conf) ---------------
+      # Shared vllm-embed, the same retrieval-embedding surface as every other
+      # provider. Model or dimension changes invalidate an existing workspace,
+      # so a contract v4 workspace (384 dims) cannot be reused under v5.
+      OPENVIKING_EMBEDDER_MODEL: "${OPENVIKING_EMBEDDER_MODEL:-gte-modernbert-base}"
+      OPENVIKING_EMBEDDER_BASE_URL: "${OPENVIKING_EMBEDDER_BASE_URL:-http://vllm-embed:8000/v1}"
+      OPENVIKING_EMBEDDER_API_KEY: "${OPENVIKING_EMBEDDER_API_KEY:-local-vllm}"
+      OPENVIKING_EMBEDDER_DIMS: "${OPENVIKING_EMBEDDER_DIMS:-768}"
+      # For the verified OpenRouter path: set OPENAI_BASE_URL /
+      # OPENVIKING_LLM_BASE_URL to https://openrouter.ai/api/v1 and supply
+      # OPENROUTER_API_KEY.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      RUN_TAG: "${RUN_TAG:-}"
+      # No .git in the container. run_shards.sh exports GIT_SHA, otherwise head_sha:null.
+      GIT_SHA: "${GIT_SHA:-}"
+      # --- run identity (2026-07-26) ------------------------------------------
+      # PRESET names a launch bundle in benchmark/docker/presets.sh. Unset
+      # means no preset behavior, and an unknown name exits 2.
+      # STRICT_RUN_CONTRACT=1 (or BENCH_CLOCKSYNC=1) makes an incomplete run
+      # contract ABORT the generate stage instead of warning.
+      # BENCH_SERVING_IMAGE* carries host-only serving identity
+      # (run_shards.sh fills them from `docker inspect vllm-gen`). The
+      # served alias alone cannot identify a checkpoint.
+      PRESET: "${PRESET:-}"
+      STRICT_RUN_CONTRACT: "${STRICT_RUN_CONTRACT:-}"
+      BENCH_CLOCKSYNC: "${BENCH_CLOCKSYNC:-}"
+      BENCH_SERVING_IMAGE: "${BENCH_SERVING_IMAGE:-}"
+      BENCH_SERVING_IMAGE_DIGEST: "${BENCH_SERVING_IMAGE_DIGEST:-}"
+      BENCH_SERVING_EMBED_IMAGE: "${BENCH_SERVING_EMBED_IMAGE:-}"
+      BENCH_SERVING_EMBED_IMAGE_DIGEST: "${BENCH_SERVING_EMBED_IMAGE_DIGEST:-}"
+    volumes:
+      - ../../benchmark:/app/benchmark
+      - ../../openviking:/app/openviking
+
+
+volumes:
+  # Scratch disk for the Mnemosyne run-service (mounted at /scratch). This is
+  # a named volume (not a bind mount, not overlayfs), purely for I/O speed.
+  # Nothing in it needs to survive. It is safe to `docker volume rm` when no
+  # run is in flight.
+  benchscratch:
+  # Hindsight run-service state (/home/bench). Mostly vestigial since
+  # local/embedded modes were removed 2026-07-22 (remote/shared only). Safe to rm.
+  hindsight_state:
+  # TEI reranker model cache (/data), HINDSIGHT_RERANK_SOURCE=remote only.
+  # Re-downloadable. Safe to rm.
+  hindsight_rerank_cache:
+  # Shared Hindsight Postgres data dir (pgvector/pgvector:pg18, mounted at
+  # /var/lib/postgresql). ONE cluster for all shards. Disposable scratch. It
+  # is safe to `docker volume rm docker_hindsight_pg` when no hindsight
+  # container refs it.
+  hindsight_pg:
+  # Shared mem0 qdrant data dir (/qdrant/storage). ONE server for all mem0
+  # shards. Disposable scratch. It is safe to `docker volume rm
+  # docker_qdrant_storage` when no mem0 container references it.
+  qdrant_storage:
+  # Shared Supermemory central-server store (/data/supermemory), one store
+  # for all shards, isolated by containerTag namespace. Reclaim it between
+  # run waves.
+  # IMPORTANT: wipe it TOGETHER with supermemory_shared below. The published
+  # key is derived from this store's auth secret. Resetting one without the
+  # other leaves a stale key: docker volume rm docker_supermemory_data docker_supermemory_shared
+  supermemory_data:
+  # Central server -> shard bearer-key handoff (/shared/api_key). Tied to
+  # supermemory_data's auth secret. ALWAYS rm the two TOGETHER, never this one alone.
+  supermemory_shared:
+  # SECOND central server (two-server topology) store + key handoff. Same pairing
+  # rule: wipe supermemory_data_b and supermemory_shared_b TOGETHER. Both stay
+  # empty/unused on a one-server run. docker volume rm docker_supermemory_data_b
+  # docker_supermemory_shared_b (with the _b servers stopped).
+  supermemory_data_b:
+  supermemory_shared_b:
+  # vLLM torch.compile/AOT graph caches (/root/.cache/vllm), shared by vllm-gen
+  # and vllm-embed (content-hashed per model+config). `docker run` test servers
+  # should mount it too. It is declared external (unprefixed name) so both
+  # paths hit the same cache.
+  vllm_compile_cache:
+    external: true
+    name: vllm_compile_cache
+  # RetainDB SERVER edition: in-process BGE-large model cache (/opt/retaindb_models),
+  # used only by RETAINDB_EMBEDDING_MODE=local runs. Re-downloadable, safe to rm.
+  retaindb_server_models:
+  # Shared Honcho Postgres data dir (pgvector/pgvector:pg16, mounted at
+  # /var/lib/postgresql/data). ONE cluster for honcho-api and honcho-deriver
+  # in the default shared topology. Disposable scratch, safe to
+  # `docker volume rm docker_honcho_pg` when no honcho container refs it.
+  honcho_pg:

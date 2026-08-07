@@ -1,0 +1,170 @@
+{
+  "canonical_config": {
+    "decoding": {
+      "MEMCONFLICT_ENABLE_THINKING": "1",
+      "MEMCONFLICT_JSON_MODE": "1",
+      "MEMCONFLICT_JSON_THINKING": "1",
+      "MEMCONFLICT_MIN_P": "0",
+      "MEMCONFLICT_PRESENCE_PENALTY": "0",
+      "MEMCONFLICT_REASONING_EFFORT": "low",
+      "MEMCONFLICT_TOP_K": "64",
+      "MEMCONFLICT_TOP_P": "0.95",
+      "OPENAI_MAX_TOKENS": "16384",
+      "OPENAI_TEMPERATURE": "1.0"
+    },
+    "stage": "score"
+  },
+  "dataset": {
+    "bytes": 39671742,
+    "line_count": 30,
+    "path": "C:\\Users\\ollie\\source\\private_testing\\external\\MemConflict\\Data\\Step4_4.jsonl",
+    "sha256": "bd9bbc5b2f3d7b82c6825f6f0c475ef0e39e783848a217af05f4d96d0fe069fc"
+  },
+  "env": {
+    "BENCH_JUDGE_MIN_P": "0",
+    "BENCH_JUDGE_PRESENCE_PENALTY": "0",
+    "BENCH_JUDGE_TEMPERATURE": "1.0",
+    "BENCH_JUDGE_TOP_K": "64",
+    "BENCH_JUDGE_TOP_P": "0.95",
+    "BENCH_PYTHON": "C:/Users/ollie/source/private_testing/.venv/Scripts/python.exe",
+    "MEMCONFLICT_ENABLE_THINKING": "1",
+    "MEMCONFLICT_EVAL_DIR": "benchmark/penalty_judge_eval",
+    "MEMCONFLICT_JSON_MODE": "1",
+    "MEMCONFLICT_JSON_THINKING": "1",
+    "MEMCONFLICT_MIN_P": "0",
+    "MEMCONFLICT_PRESENCE_PENALTY": "0",
+    "MEMCONFLICT_REASONING_EFFORT": "low",
+    "MEMCONFLICT_REQUEST_TIMEOUT": "600",
+    "MEMCONFLICT_TOP_K": "64",
+    "MEMCONFLICT_TOP_P": "0.95",
+    "OPENAI_API_KEY": "<redacted>",
+    "OPENAI_BASE_URL": "http://localhost:8002/v1",
+    "OPENAI_MAX_TOKENS": "16384",
+    "OPENAI_MODEL": "gemma-4-12b",
+    "OPENAI_TEMPERATURE": "1.0",
+    "RETRY_TIMES": "40",
+    "SCORE_WORKERS": "40",
+    "STAGE": "score",
+    "WAIT_TIME_LOWER": "2",
+    "WAIT_TIME_UPPER": "45"
+  },
+  "preset": "",
+  "provider": "mnemosyne",
+  "repo": {
+    "git_rev_parse": "8b09834e9ab15f487710bb181e5b3030db829db3",
+    "git_sha_env": "8b09834",
+    "git_sha_stamp": "ae4da68d03e57e9ea35c1a9304cfbc0503ee9934",
+    "git_sha_stamp_file": "C:\\Users\\ollie\\source\\private_testing\\benchmark\\.git_sha",
+    "head_sha": "8b09834",
+    "head_sha_source": "env:GIT_SHA",
+    "submodule_status": "ec51d5d36e87f7665d1337f3a88cbde95fc2a964 external/MemConflict (heads/main)\n 2ad2cc4d6d58145eca1a6cbbce66dfc5b5380f38 external/RetainDB (heads/main)\n 6d17b2a59376d64f5ba62cf09ba40ee00d954171 external/hermes-agent (v2026.7.20-496-g6d17b2a59)\n 9f26fdd2ea2952904fc938f69c414ca95fc59ad2 external/honcho (archive-v0.0.1-521-g9f26fdd2)\n 4e5ed14ab2b9befbc4b77f1f5b43d06de8c18bce external/mnemosyne (v3.14.0)",
+    "worktree_dirty": true
+  },
+  "run_contract": {
+    "answer_judge": {
+      "base_url": "http://localhost:8002/v1",
+      "decoding": {
+        "MEMCONFLICT_ENABLE_THINKING": "1",
+        "MEMCONFLICT_JSON_MODE": "1",
+        "MEMCONFLICT_JSON_THINKING": "1",
+        "MEMCONFLICT_MIN_P": "0",
+        "MEMCONFLICT_PRESENCE_PENALTY": "0",
+        "MEMCONFLICT_REASONING_EFFORT": "low",
+        "MEMCONFLICT_TOP_K": "64",
+        "MEMCONFLICT_TOP_P": "0.95",
+        "OPENAI_MAX_TOKENS": "16384",
+        "OPENAI_TEMPERATURE": "1.0"
+      },
+      "judge_reasoning_effort": null,
+      "judge_thinking": null,
+      "model": "gemma-4-12b",
+      "retry": {
+        "RETRY_TIMES": "40",
+        "WAIT_TIME_LOWER": "2",
+        "WAIT_TIME_UPPER": "45"
+      },
+      "thinking": null
+    },
+    "code_sha": "8b09834",
+    "dataset": {
+      "line_count": 30,
+      "path": "C:\\Users\\ollie\\source\\private_testing\\external\\MemConflict\\Data\\Step4_4.jsonl",
+      "sha256": "bd9bbc5b2f3d7b82c6825f6f0c475ef0e39e783848a217af05f4d96d0fe069fc"
+    },
+    "preset": "",
+    "prompt_hashes": {
+      "answer_system_prompt": "sha256:d01eae93c82db3835902e83a9bd462c3e4dc68512332d5274b089e4c5463ba6d",
+      "judge_system_prompt": "sha256:9f41d4f850246c856553f1afb89bd2385fce11377f8463be41ea2307efff19d1"
+    },
+    "provider": "mnemosyne",
+    "retain": {
+      "CANONICAL": null,
+      "CONSOLIDATION_WAIT_TIMEOUT_S": null,
+      "DISABLE_SCHEDULER": null,
+      "EXTRACT": null,
+      "HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION": null,
+      "LIFECYCLE": null,
+      "MEM0_ADD_BATCH_SIZE": null,
+      "OPENVIKING_RETAIN_GRANULARITY": null,
+      "OPENVIKING_SEND_CREATED_AT": null,
+      "ORACLE": null,
+      "PLUGIN_AUTO_SLEEP": null,
+      "PLUGIN_CONFIG": null,
+      "PLUGIN_PREFETCH_OVERLAY": null,
+      "PLUGIN_SESSION_SLEEP": null,
+      "PREFER_OBSERVATIONS": null,
+      "RETAINDB_RETAIN_GRANULARITY": null,
+      "RETAINDB_SERVER_PROFILE": null,
+      "RETAINDB_SERVER_PROMOTION_MODE": null,
+      "RETAINDB_SERVER_WAIT_LIFECYCLE": null,
+      "RETAIN_GRANULARITY": null,
+      "SUPERMEMORY_INGEST_ENDPOINT": null,
+      "SUPERMEMORY_RETAIN_GRANULARITY": null,
+      "USE_DATASET_TIME": null,
+      "WAIT_CONSOLIDATION": null
+    },
+    "retrieval": {
+      "MNEMOSYNE_ENHANCED_RECALL": null,
+      "MNEMOSYNE_FACT_RECALL_ENABLED": null,
+      "OPENVIKING_RECALL_MODE": null,
+      "PLUGIN_NATIVE_RECALL": null,
+      "RECALL_TYPES": null,
+      "RETAINDB_SERVER_PLUGIN_OVERLAY": null,
+      "SUPERMEMORY_DOCUMENTS_ARM": null,
+      "SUPERMEMORY_RECALL_ENDPOINT": null,
+      "SUPERMEMORY_RERANK": null,
+      "SUPERMEMORY_REWRITE_QUERY": null,
+      "SUPERMEMORY_SEARCH_MODE": null,
+      "SUPERMEMORY_SEARCH_THRESHOLD": null,
+      "top_k": null
+    },
+    "serving": {
+      "base_url": "http://localhost:8002/v1",
+      "checkpoint_roots": null,
+      "embed_model_alias": null,
+      "engine_version": null,
+      "image": null,
+      "image_digest": null,
+      "model_alias": "gemma-4-12b",
+      "served_ids": null
+    },
+    "temporal_capability": "controlled_process_clock",
+    "temporal_contract": "none"
+  },
+  "run_contract_hash": "sha256:0f7867c4fc1884cd50e37a9f99865e1a70f4c2feae5fc475ab11db03de518765",
+  "run_contract_missing_required": [
+    "retrieval.top_k"
+  ],
+  "run_contract_strict": false,
+  "run_tag": "v5ftc_gj12pen",
+  "serving_envelope": {
+    "note": "no serving-envelope sidecar found (checked: C:/Users/ollie/source/private_testing/mnemosyne\\Scores\\serving_envelope_v5ftc_gj12pen.json)"
+  },
+  "stage": "score",
+  "temporal_capability": "controlled_process_clock",
+  "temporal_contract": "none",
+  "timestamp": "2026-08-05T14:15:31.287867+00:00",
+  "token_usage": {
+    "note": "no token-usage sidecar found (checked: C:/Users/ollie/source/private_testing/mnemosyne\\Results\\token_usage_v5ftc_gj12pen.json)"
+  }
+}

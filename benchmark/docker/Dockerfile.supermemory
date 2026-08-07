@@ -1,0 +1,75 @@
+# MemConflict x Supermemory (self-hosted).
+#
+# Self-hosted Supermemory is a single native server binary
+# (`supermemory-server`) from the supermemoryai/supermemory GitHub Releases,
+# through the vendor install script. The Python adapter spawns and drives it
+# over REST. So the image needs both the server binary (plus Node 22, which
+# the vendor launcher and the local ONNX embeddings runtime use) and Python
+# (the harness plus adapter).
+#
+# Supermemory has an internal extraction LLM, configured server-side through
+# SUPERMEMORY_LLM_* (which maps to the server's own OPENAI_*). This stays
+# separate from the shared answer+judge model the harness calls. Embeddings
+# run locally (Xenova/bge-base-en-v1.5).
+#
+# Build-time egress: the RUN step that installs the server binary fetches it
+# from GitHub Releases and verifies its sha256 checksum. Build this image
+# where github.com release assets are reachable. Pin the version with the
+# build arg.
+#
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM node:22-bookworm-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install Python (the node base image has node/npm but no python) and curl
+# for the installer.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip python3-venv curl ca-certificates libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation) and the light adapter dependencies
+#    (requests, for the REST client).
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install --break-system-packages -r /app/external/MemConflict/requirements.txt \
+      requests jsonlines python-dotenv tiktoken
+
+# 2. Install the self-hosted Supermemory server binary at build time.
+#    NO_START and NO_PROMPT keep the install non-interactive and bake no API
+#    key into ~/.supermemory/env, so the runtime-injected OPENAI_* for
+#    extraction is never shadowed. The wrapper lands at
+#    /root/.local/bin/supermemory-server. Pin the version so the image stays
+#    reproducible (bump the arg to upgrade). Pinning an explicit version also
+#    avoids the installer's api.github.com "latest" lookup, which is
+#    rate-limited in CI.
+# Pin 0.0.5, not the newer 0.0.6 or 0.0.7-rc.2. Verified 2026-07-22 on this
+# host: 0.0.6 (then "latest" stable) ships a broken self-hosted linux-x64
+# bundle. At boot it logs `Cannot find module '@rivetkit/rivetkit-wasm'` and
+# `/api/rivet/metadata failed`, so the Rivet workflow engine that drives the
+# async ingest pipeline never starts. Every POST /v3/documents then sits at
+# status:"queued" forever (measured: a session doc stuck 600s, drain timed
+# out, 0 extraction LLM calls, 0 memories). 0.0.7-rc.2 prints no error but
+# stays stuck at "queued" too. 0.0.5 boots with `workflow rivet` and
+# processes a document to "done" in about 5s (extraction, embedding, stored
+# chunks, memory agent, finalized), so it is the nearest working release.
+# Check newer tags again when they appear. Bump the pin only after
+# confirming a document reaches "done" in a smoke test.
+ARG SUPERMEMORY_SERVER_VERSION=0.0.5
+RUN curl -fsSL https://supermemory.ai/install -o /tmp/sm_install.sh \
+ && SUPERMEMORY_NO_START=1 SUPERMEMORY_NO_PROMPT=1 bash /tmp/sm_install.sh "${SUPERMEMORY_SERVER_VERSION}" \
+ && rm -f /tmp/sm_install.sh \
+ && /root/.local/bin/supermemory-server --version || true
+
+# 3. Copy the shared harness, the Supermemory adapter, and the MemConflict
+#    dataset and Evaluation helpers. docker-compose bind-mounts benchmark/
+#    and supermemory/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY supermemory /app/supermemory
+COPY external/MemConflict /app/external/MemConflict
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.supermemory.sh"]

@@ -1,0 +1,74 @@
+--- a/packages/server/src/engine/memory/search.ts	2026-07-22 01:38:02.472912732 +0000
++++ b/packages/server/src/engine/memory/search.ts	2026-07-22 01:38:02.519680298 +0000
+@@ -26,6 +26,14 @@
+ // Lower semantic cache threshold for higher hit rate (was 0.92, now 0.85)
+ const SEMANTIC_CACHE_THRESHOLD = 0.85;
+ 
++// Benchmark correctness knob (default false = vendor behaviour unchanged). When
++// true, bypass BOTH search caches in searchMemories: (a) the semantic cache is
++// keyed ONLY on query-embedding similarity with no project/user/question_date
++// scoping (cross-tenant leakage), and (b) the exact-key cache omits question_date,
++// so re-asked dynamic questions within the 300s TTL return stale, temporally-wrong
++// results. Neither key shape nor threshold is changed — this only skips get/set.
++const SEARCH_CACHE_DISABLED = /^true$/i.test(process.env.RETAINDB_DISABLE_SEARCH_CACHE || "false");
++
+ // SLO budgets (overridable via env)
+ const TOTAL_SLO_BUDGET_MS = parseInt(process.env.MEMORY_SEARCH_TOTAL_BUDGET_MS || "220", 10);
+ const POST_VECTOR_BUDGET_MS = parseInt(process.env.MEMORY_SEARCH_POST_VECTOR_BUDGET_MS || "120", 10);
+@@ -242,7 +250,7 @@
+   // Step 0a: Check simple cache first (before embedding!)
+   const step0Start = Date.now();
+   const cacheKey = `search:${projectId}:${userId || ""}:${sessionId || ""}:${agentId || ""}:${taskId || ""}:${applicableScopes.join(",")}:${query}:${topK}`;
+-  const simpleCached = await getFromCache<MemorySearchResult[]>(cacheKey);
++  const simpleCached = SEARCH_CACHE_DISABLED ? null : await getFromCache<MemorySearchResult[]>(cacheKey);
+   timings.push({ step: "simple_cache", duration: Date.now() - step0Start });
+   
+   if (simpleCached) {
+@@ -261,14 +269,14 @@
+   timings.push({ step: "embedding", duration: Date.now() - embedStart });
+ 
+   const semanticCacheStart = Date.now();
+-  const cached = await getFromSemanticCache(queryEmbedding);
++  const cached = SEARCH_CACHE_DISABLED ? null : await getFromSemanticCache(queryEmbedding);
+   timings.push({ step: "semantic_cache_check", duration: Date.now() - semanticCacheStart });
+ 
+   if (cached && cached.similarity >= SEMANTIC_CACHE_THRESHOLD) {
+     cacheHitType = "semantic";
+     console.log(`⚡ Semantic cache hit (similarity: ${cached.similarity.toFixed(3)})`);
+     const results = cached.results.slice(0, topK);
+-    await setInCache(cacheKey, results, 300);
++    if (!SEARCH_CACHE_DISABLED) await setInCache(cacheKey, results, 300);
+     const total = Date.now() - startTotal;
+     timings.push({ step: "TOTAL", duration: total });
+     logTimings(timings, query);
+@@ -310,7 +318,7 @@
+   }
+ 
+   if (scopedSemanticResults.length === 0) {
+-    await setInCache(cacheKey, [], 60); // Cache empty results too
++    if (!SEARCH_CACHE_DISABLED) await setInCache(cacheKey, [], 60); // Cache empty results too
+     const total = Date.now() - startTotal;
+     timings.push({ step: "TOTAL", duration: total });
+     logTimings(timings, query);
+@@ -324,8 +332,8 @@
+     const topMemories = scopedSemanticResults.slice(0, topK);
+     
+     // Cache good results
+-    await setInSemanticCache(queryEmbedding, topMemories, 300);
+-    await setInCache(cacheKey, topMemories, 300); // 5 min cache
++    if (!SEARCH_CACHE_DISABLED) await setInSemanticCache(queryEmbedding, topMemories, 300);
++    if (!SEARCH_CACHE_DISABLED) await setInCache(cacheKey, topMemories, 300); // 5 min cache
+     
+     const total = Date.now() - startTotal;
+     timings.push({ step: "TOTAL", duration: total });
+@@ -422,8 +430,8 @@
+ 
+   // Cache results for similar queries
+   const cacheWriteStart = Date.now();
+-  await setInSemanticCache(queryEmbedding, results, 300);
+-  await setInCache(cacheKey, results, 300); // 5 min cache
++  if (!SEARCH_CACHE_DISABLED) await setInSemanticCache(queryEmbedding, results, 300);
++  if (!SEARCH_CACHE_DISABLED) await setInCache(cacheKey, results, 300); // 5 min cache
+   timings.push({ step: "cache_write", duration: Date.now() - cacheWriteStart });
+ 
+   const total = Date.now() - startTotal;

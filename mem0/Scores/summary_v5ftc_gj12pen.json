@@ -1,0 +1,74 @@
+{
+  "system": "mem0",
+  "scored_questions": 3750,
+  "question_rows_in_file": 3750,
+  "unroutable_rows": {},
+  "judge_methods": {
+    "llm_judge": 3748,
+    "missing_answer": 2
+  },
+  "overall": {
+    "micro": {
+      "AA": 0.3042666666666667,
+      "SEH@3": 0.5602666666666667,
+      "SEH@5": 0.636,
+      "log_rank@3": 0.49189601117905074,
+      "EUG_gap@3": 0.256,
+      "EUG@5": 0.629350104821803
+    },
+    "macro_memconflict_protocol": {
+      "AA": 0.3920676022254434,
+      "SEH@3": 0.6722624355516412,
+      "SEH@5": 0.7350436995039846,
+      "log_rank@3": 0.6051700584789513,
+      "EUG_gap@3": 0.2801948333261979,
+      "EUG@5": 0.5838374140722746
+    }
+  },
+  "by_conflict_type": {
+    "dynamic_conflict": {
+      "N": 2946,
+      "AA": 0.25033944331296676,
+      "SEH@3": 0.5016972165648337,
+      "SEH@5": 0.5848608282416836,
+      "N_at_5": 2946,
+      "log_rank@3": 0.43188267620502696,
+      "EUG_gap@3": 0.2513577732518669,
+      "EUG@5": 0.6218804410911202,
+      "EUG@5_N": 1723,
+      "diagnostic": {
+        "UOCS": 0.5067888662593347
+      }
+    },
+    "static_conflict": {
+      "N": 360,
+      "AA": 0.09027777777777778,
+      "SEH@3": 0.5916666666666667,
+      "SEH@5": 0.6833333333333333,
+      "N_at_5": 360,
+      "log_rank@3": 0.5005587123511942,
+      "EUG_gap@3": 0.5013888888888889,
+      "EUG@5": 0.23780487804878048,
+      "EUG@5_N": 246,
+      "diagnostic": {
+        "CRS": 0.5361111111111111
+      }
+    },
+    "conditional_conflict": {
+      "N": 444,
+      "AA": 0.8355855855855856,
+      "SEH@3": 0.9234234234234234,
+      "SEH@5": 0.9369369369369369,
+      "N_at_5": 444,
+      "log_rank@3": 0.8830687868806331,
+      "EUG_gap@3": 0.08783783783783783,
+      "EUG@5": 0.8918269230769231,
+      "EUG@5_N": 416,
+      "diagnostic": null
+    }
+  },
+  "metric_notes": {
+    "EUG_gap@3": "upstream MemConflict EUG: SEH@3 - AA per type; macro value = Average_EUG",
+    "EUG@5": "this repo only: mean AA over questions whose gold evidence reached rank <= 5"
+  }
+}

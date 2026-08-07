@@ -1,0 +1,58 @@
+# MemConflict x OpenViking. SCAFFOLD (adapter under active development, see
+# openviking/eval_openviking.py).
+#
+# One pip distribution ships both sides of this provider: `openviking==0.4.12`
+# installs the SDK and the `openviking-server` console script (FastAPI/uvicorn),
+# and that server keeps its content store and its vector index in ONE local
+# workspace directory. So this image needs no database service and no compose
+# sidecar. openviking/_openviking_server.py starts the console script as a child
+# process and injects the libfaketime LD_PRELOAD into the CHILD env only, the
+# same spawn-mode pattern as _supermemory_server.py and _honcho_server.py.
+#
+# Two LLM roles run against the shared vLLM stack:
+#   * shared answer and judge LLM (MemConflict llm_request) -> OPENAI_* (vllm-gen)
+#   * OpenViking-internal chat model (memory extraction, search intent
+#     analysis)                                             -> OPENVIKING_LLM_* (vllm-gen)
+# The embedder defaults to the shared vllm-embed (gte-modernbert-base, dim 768).
+#
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HUB_DISABLE_XET=1 \
+    TOKENIZERS_PARALLELISM=false
+
+# curl: server /ready polling and image debugging.
+# libfaketime: BENCH_CLOCKSYNC=1, injected by the adapter into the spawned
+# server child env only (openviking/_openviking_server.py). This shell and the
+# harness process keep real time.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation) and the pinned OpenViking distribution.
+#    httpx is the adapter's only OpenViking client: the Hermes plugin speaks
+#    raw HTTP with no SDK, and the provider folder /app/openviking shadows the
+#    pip package name, so the adapter must never import the SDK.
+#    This layer is large. openviking 0.4.12 pulls litellm, the volcengine SDKs,
+#    tree-sitter, and scrapy, and the vendor publishes no slim extra.
+#    The `command -v` check fails the build here instead of at container start
+#    if the console script the server manager execs is absent.
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install -r /app/external/MemConflict/requirements.txt \
+      "openviking==0.4.12" httpx jsonlines python-dotenv tiktoken \
+ && test -x "$(command -v openviking-server)"
+
+# 2. Copy the shared harness, the OpenViking adapter, and the MemConflict
+#    dataset and Evaluation helpers. docker-compose bind-mounts benchmark/
+#    and openviking/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY openviking /app/openviking
+COPY external/MemConflict /app/external/MemConflict
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.openviking.sh"]

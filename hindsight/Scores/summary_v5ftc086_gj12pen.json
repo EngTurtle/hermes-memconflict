@@ -1,0 +1,74 @@
+{
+  "system": "hindsight",
+  "scored_questions": 3750,
+  "question_rows_in_file": 3750,
+  "unroutable_rows": {},
+  "judge_methods": {
+    "llm_judge": 3739,
+    "missing_answer": 11
+  },
+  "overall": {
+    "micro": {
+      "AA": 0.3058666666666667,
+      "SEH@3": 0.4656,
+      "SEH@5": 0.564,
+      "log_rank@3": 0.3942039175171459,
+      "EUG_gap@3": 0.15973333333333334,
+      "EUG@5": 0.5969267139479906
+    },
+    "macro_memconflict_protocol": {
+      "AA": 0.21788221520909912,
+      "SEH@3": 0.38178264822867675,
+      "SEH@5": 0.4345627195423529,
+      "log_rank@3": 0.33348546558326797,
+      "EUG_gap@3": 0.1639004330195776,
+      "EUG@5": 0.6434959178393462
+    }
+  },
+  "by_conflict_type": {
+    "dynamic_conflict": {
+      "N": 2946,
+      "AA": 0.3464019008825526,
+      "SEH@3": 0.5084860828241684,
+      "SEH@5": 0.6289884589273591,
+      "N_at_5": 2946,
+      "log_rank@3": 0.4252145788575344,
+      "EUG_gap@3": 0.16208418194161578,
+      "EUG@5": 0.5933621154883972,
+      "EUG@5_N": 1853,
+      "diagnostic": {
+        "UOCS": 0.5885947046843177
+      }
+    },
+    "static_conflict": {
+      "N": 360,
+      "AA": 0.11805555555555555,
+      "SEH@3": 0.41388888888888886,
+      "SEH@5": 0.44722222222222224,
+      "N_at_5": 360,
+      "log_rank@3": 0.3550574496329388,
+      "EUG_gap@3": 0.2958333333333333,
+      "EUG@5": 0.4658385093167702,
+      "EUG@5_N": 161,
+      "diagnostic": {
+        "CRS": 0.18611111111111112
+      }
+    },
+    "conditional_conflict": {
+      "N": 444,
+      "AA": 0.1891891891891892,
+      "SEH@3": 0.22297297297297297,
+      "SEH@5": 0.22747747747747749,
+      "N_at_5": 444,
+      "log_rank@3": 0.22018436825933085,
+      "EUG_gap@3": 0.03378378378378377,
+      "EUG@5": 0.8712871287128713,
+      "EUG@5_N": 101,
+      "diagnostic": null
+    }
+  },
+  "metric_notes": {
+    "EUG_gap@3": "upstream MemConflict EUG: SEH@3 - AA per type; macro value = Average_EUG",
+    "EUG@5": "this repo only: mean AA over questions whose gold evidence reached rank <= 5"
+  }
+}

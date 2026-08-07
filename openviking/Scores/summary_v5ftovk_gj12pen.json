@@ -1,0 +1,74 @@
+{
+  "system": "openviking",
+  "scored_questions": 3750,
+  "question_rows_in_file": 3750,
+  "unroutable_rows": {},
+  "judge_methods": {
+    "llm_judge": 3744,
+    "missing_answer": 6
+  },
+  "overall": {
+    "micro": {
+      "AA": 0.1408,
+      "SEH@3": 0.41813333333333336,
+      "SEH@5": 0.42373333333333335,
+      "log_rank@3": 0.34441517381143294,
+      "EUG_gap@3": 0.2773333333333333,
+      "EUG@5": 0.4395846444304594
+    },
+    "macro_memconflict_protocol": {
+      "AA": 0.1321697461208663,
+      "SEH@3": 0.32117861242097495,
+      "SEH@5": 0.3254675245510276,
+      "log_rank@3": 0.25854389996484833,
+      "EUG_gap@3": 0.18900886630010869,
+      "EUG@5": 0.5763349692317935
+    }
+  },
+  "by_conflict_type": {
+    "dynamic_conflict": {
+      "N": 2946,
+      "AA": 0.14290563475899526,
+      "SEH@3": 0.4650373387644263,
+      "SEH@5": 0.4711473183978276,
+      "N_at_5": 2946,
+      "log_rank@3": 0.38665008050747235,
+      "EUG_gap@3": 0.32213170400543106,
+      "EUG@5": 0.4074207492795389,
+      "EUG@5_N": 1388,
+      "diagnostic": {
+        "UOCS": 0.24575695858791582
+      }
+    },
+    "static_conflict": {
+      "N": 360,
+      "AA": 0.06666666666666667,
+      "SEH@3": 0.2777777777777778,
+      "SEH@5": 0.2777777777777778,
+      "N_at_5": 360,
+      "log_rank@3": 0.2407389808333354,
+      "EUG_gap@3": 0.21111111111111114,
+      "EUG@5": 0.48,
+      "EUG@5_N": 100,
+      "diagnostic": {
+        "CRS": 0.07777777777777778
+      }
+    },
+    "conditional_conflict": {
+      "N": 444,
+      "AA": 0.18693693693693694,
+      "SEH@3": 0.22072072072072071,
+      "SEH@5": 0.22747747747747749,
+      "N_at_5": 444,
+      "log_rank@3": 0.14824263855373718,
+      "EUG_gap@3": 0.03378378378378377,
+      "EUG@5": 0.8415841584158416,
+      "EUG@5_N": 101,
+      "diagnostic": null
+    }
+  },
+  "metric_notes": {
+    "EUG_gap@3": "upstream MemConflict EUG: SEH@3 - AA per type; macro value = Average_EUG",
+    "EUG@5": "this repo only: mean AA over questions whose gold evidence reached rank <= 5"
+  }
+}

@@ -1,0 +1,120 @@
+# MemConflict x RetainDB SERVER edition. SCAFFOLD (build-verified by reading;
+# not yet run in Docker on this host).
+#
+# This benchmarks @retaindb/server (Postgres/pgvector with LLM extraction), a
+# different product surface from the retaindb/ LOCAL edition (heuristic, no
+# DB, no LLM). The image needs both Node 20+ (to build and run the server)
+# and python3 (the harness plus adapter). The server builds from the
+# external/RetainDB submodule at image build time. At container start, the
+# entrypoint runs `prisma migrate deploy` against a per-run database on the
+# shared hindsight-pg service, then launches `node dist/index.js`. The
+# Python adapter only attaches; it never spawns a process.
+#
+# The build context is the repo root (build.context in docker-compose.yml: ../..).
+FROM node:20-bookworm-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# python3 (the harness plus adapter) and build tools for @xenova/transformers
+# native dependencies (onnxruntime), used by EMBEDDING_MODE=local, plus
+# openssl for Prisma and libgomp1 for onnxruntime. pnpm's native module
+# builds need build-essential and python3 during `pnpm install`.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-venv curl \
+      build-essential openssl libstdc++6 libgomp1 \
+      git patch libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install pnpm (the RetainDB monorepo uses pnpm@9.15.0 and turbo).
+RUN npm install -g pnpm@9.15.0
+
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation), the light adapter dependencies, and
+#    asyncpg (used by hindsight_create_db.py, reused here to create the
+#    per-run database on the shared pg service).
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+RUN pip3 install --break-system-packages -r /app/external/MemConflict/requirements.txt \
+      requests jsonlines python-dotenv tiktoken asyncpg
+
+# 2. Build the RetainDB server from the pinned submodule plus the
+#    fresh-deploy patch layer. The vendor server does not run from pristine
+#    source: the pinned Prisma client removes $use, the schema is stale at
+#    27 of 67 tables, the default org/user seed is missing, and
+#    ENCRYPTION_KEY is required. See
+#    retaindb_server/server_patches/README.md.
+#    The build copies files to /opt (outside /app) because compose
+#    bind-mounts /app/benchmark and /app/retaindb_server for live edits,
+#    which must not shadow the built server or its node_modules.
+#    Build order: copy patches and source, apply the .patch files, swap in
+#    the introspected generator schema, install, generate, then build. This
+#    mirrors the vendor Dockerfile order (install, build, prisma generate).
+#    `prisma migrate deploy` at runtime still uses the original, unchanged
+#    migrations directory. Only the generator input schema is replaced.
+COPY retaindb_server/server_patches /opt/retaindb_server_patches
+COPY external/RetainDB /opt/retaindb_server_src
+RUN cd /opt/retaindb_server_src \
+ && rm -rf .git node_modules packages/server/node_modules \
+ && for p in /opt/retaindb_server_patches/[0-9]*.patch; do \
+      echo "[build] applying $(basename "$p")"; \
+      git apply -p1 "$p" || patch -p1 < "$p"; \
+    done \
+ && cp /opt/retaindb_server_patches/schema.introspected.prisma packages/server/prisma/schema.prisma \
+ && pnpm install --frozen-lockfile --filter @retaindb/server... \
+ && pnpm --filter @retaindb/server run build \
+ && pnpm --filter @retaindb/server exec prisma generate
+
+# 2b. Clock-sync arm only: this installs an in-container Postgres so the
+#     BENCH_CLOCKSYNC=1 entrypoint branch can run a throwaway per-shard
+#     cluster inside the same faked clock domain as the node app. This fixes
+#     the validUntil wall-clock leak: the app writes validUntil=new Date(),
+#     while the DB filters on validUntil>NOW(). A shared central
+#     hindsight-pg cannot be clock-faked per shard, so this uses a local one
+#     instead. pg18 deliberately matches the shared pgvector/pgvector:pg18
+#     hindsight-pg image, so Prisma migrations behave the same way. This
+#     step runs after the expensive pnpm build layer (step 2), so a future
+#     change to this apt layer does not invalidate the build cache; only the
+#     cheap COPY steps below rebuild after it.
+#     The RUN step also asserts that vector.so, vector.control, and
+#     pg_trgm.control exist for PG 18 (the entrypoint's create-db flow runs
+#     CREATE EXTENSION vector/pg_trgm), and creates the throwaway data
+#     directory parent, owned by `postgres`.
+RUN install -d /usr/share/postgresql-common/pgdg \
+ && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+ && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-18 postgresql-18-pgvector \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -f /usr/lib/postgresql/18/lib/vector.so \
+ && test -f /usr/share/postgresql/18/extension/vector.control \
+ && test -f /usr/share/postgresql/18/extension/pg_trgm.control \
+ && install -d -o postgres -g postgres /var/lib/bench-pg
+
+# 3. Set the in-process embedding model cache directory. The default run
+#    mode is remote (RETAINDB_EMBEDDING_MODE=remote, the contract config):
+#    the shared vllm-embed (gte-modernbert-base, 768-dim under contract v5;
+#    the proxy zero-pads 768 to 1024) serves embeddings
+#    through retaindb_server/embed_proxy.py, so no in-process model loads
+#    and no HF download happens. This path is not pre-baked
+#    here: docker-compose mounts a named volume (retaindb_server_models) at
+#    this path, which would shadow any baked model. In the off-contract
+#    local debug mode (RETAINDB_EMBEDDING_MODE=local), the in-process
+#    Xenova/bge-large-en-v1.5 model downloads once on first use, into that
+#    same persistent volume, so it survives --rm runs.
+ENV TRANSFORMERS_CACHE=/opt/retaindb_models \
+    HF_HUB_DISABLE_XET=1
+
+# 4. Copy the shared harness, the RetainDB-server adapter, and the
+#    MemConflict dataset and Evaluation helpers. docker-compose bind-mounts
+#    benchmark/ and retaindb_server/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY retaindb_server /app/retaindb_server
+COPY external/MemConflict /app/external/MemConflict
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.retaindb-server.sh"]

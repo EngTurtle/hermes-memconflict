@@ -1,0 +1,49 @@
+--- a/packages/server/src/db/index.ts	2026-07-21 23:08:50.175321450 +0000
++++ b/packages/server/src/db/index.ts	2026-07-21 23:08:50.177604971 +0000
+@@ -27,21 +27,29 @@
+   }
+ }
+ 
+-export const db = globalForPrisma.prisma ?? new PrismaClient({
++// Single client extension — converts BigInt to string at the DB boundary.
++// Ported from the deprecated `$use` middleware (removed in @prisma/client 6.19)
++// to the `$extends` query API. Like `$use`, `$allOperations` does not intercept
++// raw ($queryRaw/$executeRaw) calls, so behaviour parity is preserved.
++// Arrays are already covered by the object branch since Array is also typeof "object".
++const basePrisma = globalForPrisma.prisma ?? new PrismaClient({
+   datasources: {
+     db: {
+       url: buildDatabaseUrl(),
+     },
+   },
+ });
+-export const prisma = db;
+-
+-// Single middleware — converts BigInt to string at the DB boundary.
+-// Arrays are already covered by the object branch since Array is also typeof "object".
+-prisma.$use(async (params, next) => {
+-  const result = await next(params);
+-  return hasBigInt(result) ? convertBigIntToString(result) : result;
++export const db: any = (basePrisma as any).$extends({
++  query: {
++    $allModels: {
++      async $allOperations({ args, query }: any) {
++        const result = await query(args);
++        return hasBigInt(result) ? convertBigIntToString(result) : result;
++      },
++    },
++  },
+ });
++export const prisma = db;
+ 
+ // Fast check before doing full recursive traversal
+ function hasBigInt(obj: any): boolean {
+@@ -66,7 +74,7 @@
+ 
+ // Cache singleton in production to prevent exhausting connection pool on hot reloads
+ if (process.env.NODE_ENV === "production") {
+-  globalForPrisma.prisma = db;
++  globalForPrisma.prisma = basePrisma;
+ }
+ 
+ // Re-export Prisma types for convenience

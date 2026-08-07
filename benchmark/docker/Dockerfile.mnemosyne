@@ -1,0 +1,60 @@
+# MemConflict x Mnemosyne benchmark harness. CPU-only.
+#
+# Reason: a long-lived Python process on the Windows host was not reliable.
+# It left orphaned child processes, and tool timeouts killed the parent process.
+# A container gives Docker full control of the process lifecycle.
+# You can launch it detached, read logs with `docker logs`, and stop it cleanly
+# with `docker stop`. This removes the need for host-side process management.
+#
+# All inference (answers, judge, embeddings) goes to the vLLM servers over HTTP.
+# So this image needs no GPU and no ML runtime, only the Python harness and
+# Mnemosyne. The vLLM servers run in their own GPU containers.
+# This container only sends requests to them.
+#
+# The build context is the repo root. See `build.context` in docker-compose.yml.
+# So the COPY paths below are relative to the repo root.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# libfaketime supports the clock-sync arms (BENCH_CLOCKSYNC=1).
+# LD_PRELOAD applies it to the generate-stage Python process.
+# This makes Mnemosyne's internal datetime.now() call follow the logical
+# dataset time. It has no effect otherwise. See benchmark/docker/clock_sync.sh.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+# 1. Install the pinned MemConflict dependencies.
+#    requirements-lock.txt also pins the mnemosyne[embeddings] extras
+#    (fastembed, sqlite-vec). So step 2 can install Mnemosyne with --no-deps
+#    and stay fully reproducible.
+COPY benchmark/requirements-lock.txt /app/benchmark/requirements-lock.txt
+RUN pip install -r /app/benchmark/requirements-lock.txt
+
+# 2. Install Mnemosyne (pinned submodule) in editable mode.
+#    The version comes from mnemosyne.__version__. This needs no git or
+#    setuptools_scm at build time.
+COPY external/mnemosyne /app/external/mnemosyne
+RUN pip install -e /app/external/mnemosyne --no-deps
+
+# 3. Copy the shared harness (scorers, summarizer, llm glue, docker), the
+#    Mnemosyne provider adapter and its results, and the MemConflict
+#    dataset and Evaluation helpers (submodule).
+#    These files are baked in so the image runs standalone.
+#    At runtime, docker-compose bind-mounts benchmark/ and mnemosyne/ over
+#    these, for live edits and persisted outputs.
+COPY benchmark /app/benchmark
+COPY mnemosyne /app/mnemosyne
+COPY external/MemConflict /app/external/MemConflict
+
+# Run the entrypoint from the benchmark tree, not from a copy in
+# /usr/local/bin. The tree is baked in but bind-mounted at runtime.
+# So edits to entrypoint.sh apply live through the compose bind-mount, with
+# no rebuild. `bash` runs it directly, so the exec bit does not need to
+# survive a Windows bind-mount.
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.mnemosyne.sh"]

@@ -1,0 +1,106 @@
+# MemConflict x Hindsight.
+#
+# Two storage modes share this image, selected by HINDSIGHT_PG_MODE in
+# entrypoint.hindsight.sh. `shared` points the daemon at the co-tenant
+# hindsight-pg service and carries the full 30-persona minimal runs. `pg0`
+# boots the bundled embedded PostgreSQL inside the container, one persona per
+# container, and is the only mode the featured clock-sync arm can use.
+#
+# Hindsight embedded mode (hindsight-all) bundles PostgreSQL 18 with local HF
+# models (bge-small embeddings and the ms-marco reranker). `initdb` refuses to
+# run as root. So this image runs as a non-root user with a writable HOME
+# (~/.pg0, ~/.hindsight, HF cache).
+#
+# The build context is the repo root. See build.context in docker-compose.yml.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Runtime dependencies for the bundled Postgres 18 stack:
+#  - libicu-dev/locales: collation support for initdb and postmaster.
+#  - procps: provides the standalone `kill` binary. pg0's liveness check
+#    (is_process_running) spawns `kill -0 <pid>` through Command::new. The
+#    python:*-slim image has no /bin/kill, only the shell builtin. Without
+#    procps, the spawn fails, pg0 reports every instance as stopped with
+#    uri=None even while Postgres runs, and the Hindsight daemon exits with
+#    "Database URL is required for migrations".
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libicu-dev locales curl procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# libfaketime serves the featured clock-sync arm (HINDSIGHT_PG_MODE=pg0).
+# Unlike every other provider image, nothing here preloads it globally:
+# eval_hindsight.py sets LD_PRELOAD in the env of the hindsight-api daemon
+# child only, so the daemon, initdb, and the pg0 postmaster read the logical
+# dataset date while the adapter and the shell stay on the real clock.
+# Needed because hindsight-all discards the caller's retain timestamp on the
+# update_mode="append" path and falls back to utcnow(). The ftclk1_p0 smoke
+# stamped every fact 2026 over a 2022 dataset: update order recognition
+# 0.547 -> 0.305, micro answer accuracy 0.475 -> 0.344 on persona 0. 0.8.5
+# fixes the merge, but upstream issue #3010 still collapses per-item dates
+# and the utcnow() fallback is unchanged, so the preload stays.
+# Inert on the minimal arm — `session` granularity goes through _retain_one,
+# which passes no update_mode and never enters the merge.
+# Debian 13 puts the .so at /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1,
+# which is clock_sync.sh's BENCH_LIBFAKETIME default. Verified 0.9.10.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libfaketime \
+ && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user with a writable HOME for initdb and the model/HF caches.
+RUN useradd -m -u 1000 bench
+WORKDIR /app
+
+# 1. Install the provider-agnostic harness dependencies (scorer, summarizer,
+#    llm glue, MemConflict Evaluation) and the Hindsight SDK.
+COPY external/MemConflict/requirements.txt /app/external/MemConflict/requirements.txt
+# Install CPU-only torch first. This container has no CUDA, so embeddings and
+# the reranker run on CPU. Without this step, hindsight-all's transitive
+# torch dependency resolves to the CUDA build, which adds about 7GB of
+# nvidia-* wheels and pushes the image past 10GB.
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install -r /app/external/MemConflict/requirements.txt jsonlines
+
+# The vendor pin gets its own layer so bumping it does not re-pull the CPU
+# torch wheel and the MemConflict requirements above (~3 GB of downloads).
+#
+# 0.8.6 over the 0.8.4 that produced the banked v4minc artifacts: 0.8.5
+# (PR #2684) restores the caller's event_date through the update_mode="append"
+# merge that the featured arm exercises, and #2930/#2935 in 0.8.6 sit on that
+# same path. This changes the product under test, so the minimal arm is re-run
+# on this pin rather than compared across it.
+#
+# pg0-embedded is pinned explicitly because hindsight-all asks only for
+# >=0.14.2, which leaves the bundled PostgreSQL version free to drift between
+# builds. 0.15.0 measured: PostgreSQL 18.1.0, pgvector 0.8.5, pg_trgm 1.6.
+# No pre-bake step: the pg0 wheel carries PostgreSQL inside its 33 MB Rust
+# binary and extracts it to ~/.pg0/installation on first start. Measured under
+# `--network none`: 3.8 s for extract + initdb + postmaster up, and no egress.
+# Never bake it into /home/bench — compose mounts a volume there.
+# The extracted postgres binary is ET_DYN against libc.so.6, so the daemon's
+# LD_PRELOAD reaches the postmaster: with the clock faked to 2022-03-14,
+# `SELECT now()` returned 2022-03-14 against a real clock of 2026-07-31.
+RUN pip install "hindsight-all==0.8.6" "pg0-embedded==0.15.0"
+
+# 2. Copy the shared harness, the Hindsight adapter, and the MemConflict
+#    dataset and Evaluation helpers. docker-compose bind-mounts benchmark/
+#    and hindsight/ over these for live edits.
+COPY benchmark /app/benchmark
+COPY hindsight /app/hindsight
+COPY external/MemConflict /app/external/MemConflict
+
+RUN chown -R bench:bench /app
+USER bench
+ENV HOME=/home/bench \
+    HF_HOME=/home/bench/.hf_cache \
+    HF_HUB_DISABLE_XET=1
+# compose mounts the named volume `hindsight_state` here so the HF model
+# downloads survive `--rm`. That volume is SHARED by every shard, so the pg0
+# arm cannot keep ~/.pg0 in it: concurrent per-persona containers would fight
+# over one instances/ dir. entrypoint.hindsight.sh moves HOME to a
+# container-local /tmp path for HINDSIGHT_PG_MODE=pg0, which also means that
+# arm re-extracts PostgreSQL and re-downloads the HF models per container.
+
+ENTRYPOINT ["bash", "/app/benchmark/docker/entrypoint.hindsight.sh"]

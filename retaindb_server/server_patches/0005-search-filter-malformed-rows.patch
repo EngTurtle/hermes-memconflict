@@ -1,0 +1,47 @@
+--- a/packages/server/src/api/memory.ts	2026-07-22 03:28:11.175781655 +0000
++++ b/packages/server/src/api/memory.ts	2026-08-02 00:00:00.000000000 +0000
+@@ -843,6 +843,44 @@
+         }
+       };
+ 
++      // Wrap-and-keep raw rows. The engine's early-exit path
++      // (engine/memory/search.ts step 3, top similarity >=
++      // EARLY_EXIT_SIMILARITY 0.92) returns scopedSemanticResults directly:
++      // raw memory rows WITHOUT the { memory } envelope that
++      // injectSourceChunks builds on every other path. So rows lacking
++      // .memory are the HIGHEST-confidence results, not garbage. An earlier
++      // version of this patch dropped them, which emptied recall exactly
++      // when retrieval was most sure (11 of 122 questions lost all
++      // candidates in the ft27rdb smoke, each paired with an "Early exit
++      // at 0.9xx" log line). Wrapping mirrors injectSourceChunks'
++      // chunk-less shape exactly, so the formatter below sees one shape.
++      results = results.filter((r: any) => r).map((r: any) => {
++        if (r.memory) return r;
++        console.warn("[search] wrapping raw result row lacking .memory (early-exit shape)");
++        return {
++          memory: {
++            id: r.id,
++            content: r.content,
++            memoryType: r.memoryType,
++            entityMentions: r.entityMentions || [],
++            confidence: r.confidence,
++            version: r.version,
++            scope: r.scope,
++            scopeTarget: r.scope,
++            userId: r.userId ?? null,
++            sessionId: r.sessionId ?? null,
++            agentId: r.agentId ?? null,
++            taskId: r.taskId ?? null,
++            temporal: {
++              documentDate: r.documentDate,
++              eventDate: r.eventDate,
++              validFrom: r.validFrom,
++              validUntil: r.validUntil,
++            },
++          },
++          similarity: r.similarity,
++        };
++      });
+       const formattedResults = results.map((r) => ({
+         memory: {
+           id: r.memory.id,

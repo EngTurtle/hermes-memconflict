@@ -1,0 +1,56 @@
+{
+  "concurrent_use_caveat": "These deltas are vLLM's own cumulative counters differenced over the run window, so they attribute ALL traffic that any client sent to the server during that window to this run \u2014 including a concurrent run, a probe, or another provider's shards. Per-shard files (scope=shard) each cover the WHOLE server for their window and must NOT be summed; use the scope=run file for a wave total.",
+  "invalid_reason": null,
+  "metric_source": "vLLM Prometheus /metrics: prompt_tokens_total, generation_tokens_total, request_success_total, prefix_cache_queries_total, prefix_cache_hits_total (name-suffix matched, all label series summed); restart detected via process_start_time_seconds. prefix_cache_* are in TOKENS; prefix_cache_hit_rate is hits/queries over THIS run's window, null when the counters are absent (vllm-embed) or queries==0 (prefix caching disabled or never consulted). NOTE: prompt_tokens_total counts logical prompt tokens regardless of cache hits, so it stays comparable across providers but does NOT reflect prefill compute saved by the cache.",
+  "provider": "supermemory",
+  "run_tag": "v5ftc",
+  "scope": "run",
+  "servers": {
+    "vllm_embed": {
+      "cumulative_end": {
+        "generation_tokens": 0,
+        "prefix_cache_hits": 0,
+        "prefix_cache_queries": 0,
+        "prompt_tokens": 48668870,
+        "requests": 1127616
+      },
+      "end_at": "2026-08-04T08:11:43.948869+00:00",
+      "generation_tokens": 0,
+      "invalid_reason": null,
+      "prefix_cache_hit_rate": null,
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "prompt_tokens": 11737050,
+      "requests": 118712,
+      "start_at": "2026-08-04T01:36:10.653698+00:00",
+      "total_tokens": 11737050,
+      "valid": true
+    },
+    "vllm_gen": {
+      "cumulative_end": {
+        "generation_tokens": 101441786,
+        "prefix_cache_hits": 1100810304,
+        "prefix_cache_queries": 1977220849,
+        "prompt_tokens": 1977220849,
+        "requests": 207826
+      },
+      "end_at": "2026-08-04T08:11:43.927133+00:00",
+      "generation_tokens": 18328682,
+      "invalid_reason": null,
+      "prefix_cache_hit_rate": 0.752718,
+      "prefix_cache_hits": 127627104,
+      "prefix_cache_queries": 169555080,
+      "prompt_tokens": 169555080,
+      "requests": 18384,
+      "start_at": "2026-08-04T01:36:10.631247+00:00",
+      "total_tokens": 187883762,
+      "valid": true
+    }
+  },
+  "start_snapshot_file": "/root/token_start_sm_v5ftc_KEEP.json",
+  "valid": true,
+  "window": {
+    "end": "2026-08-04T08:11:43.927100+00:00",
+    "start": "2026-08-04T01:36:10.631219+00:00"
+  }
+}

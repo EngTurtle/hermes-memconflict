@@ -1,0 +1,1742 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model Project {
+  id                 String               @id @default(uuid())
+  orgId              String
+  name               String
+  slug               String?
+  description        String?
+  repositoryUrl      String?
+  defaultBranch      String               @default("main")
+  scanSettings       Json                 @default("{}")
+  aiSettings         Json                 @default("{}")
+  settings           Json                 @default("{}")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  chat_conversations chat_conversations[]
+  chunks             Chunk[]
+  documents          Document[]
+  entities           Entity[]
+  entityRelations    EntityRelation[]
+  memories           Memory[]
+  organizations      organizations        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  reports            reports[]
+  scan_comparisons   scan_comparisons[]
+  scans              scans[]
+  sessions           Session[]
+  sources            Source[]
+
+  @@unique([orgId, name])
+  @@unique([orgId, slug])
+  @@index([createdAt])
+  @@map("projects")
+}
+
+model Source {
+  id                                                       String          @id @default(uuid())
+  orgId                                                    String
+  projectId                                                String?
+  name                                                     String
+  type                                                     String
+  connectorType                                            String?
+  config                                                   Json            @default("{}")
+  status                                                   SourceStatus    @default(PENDING)
+  syncMode                                                 SyncMode        @default(MANUAL)
+  syncSchedule                                             String?
+  lastSyncAt                                               DateTime?
+  lastSyncStatus                                           String?
+  lastSyncError                                            String?
+  syncError                                                String?
+  syncErrorCount                                           Int             @default(0)
+  documentsCount                                           Int             @default(0)
+  documentCount                                            Int             @default(0)
+  chunkCount                                               Int             @default(0)
+  lastSyncDurationMs                                       Int?
+  bytesIndexed                                             BigInt          @default(0)
+  autoSync                                                 Boolean         @default(true)
+  branch                                                   String?
+  pathFilter                                               String?
+  createdAt                                                DateTime        @default(now())
+  updatedAt                                                DateTime        @updatedAt
+  activeVersionId                                          String?
+  deletedAt                                                DateTime?
+  restoreUntil                                             DateTime?
+  documents                                                Document[]
+  versions                                                 SourceVersion[]
+  source_versions_sources_activeVersionIdTosource_versions SourceVersion?  @relation("sources_activeVersionIdTosource_versions", fields: [activeVersionId], references: [id])
+  organizations                                            organizations   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project                                                  Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sync_jobs                                                SyncJob[]
+  webhooks                                                 Webhook[]
+
+  @@unique([orgId, name])
+  @@index([projectId])
+  @@index([status])
+  @@index([activeVersionId])
+  @@index([deletedAt])
+  @@index([orgId])
+  @@index([syncMode])
+  @@index([type])
+  @@map("sources")
+}
+
+model SourceVersion {
+  id                                               String              @id @default(uuid())
+  sourceId                                         String
+  orgId                                            String
+  projectId                                        String?
+  versionNumber                                    Int
+  status                                           SourceVersionStatus @default(STAGED)
+  syncJobId                                        String?
+  partialFailure                                   Boolean             @default(false)
+  warningCodes                                     String[]            @default([])
+  errorCode                                        String?
+  errorMessage                                     String?
+  documentCount                                    Int                 @default(0)
+  chunkCount                                       Int                 @default(0)
+  promotedAt                                       DateTime?
+  supersededAt                                     DateTime?
+  failedAt                                         DateTime?
+  restoreUntil                                     DateTime?
+  createdAt                                        DateTime            @default(now())
+  updatedAt                                        DateTime            @default(now()) @updatedAt
+  documents                                        Document[]
+  source                                           Source              @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sources_sources_activeVersionIdTosource_versions Source[]            @relation("sources_activeVersionIdTosource_versions")
+
+  @@unique([sourceId, versionNumber])
+  @@index([sourceId, status])
+  @@index([restoreUntil])
+  @@index([syncJobId])
+  @@map("source_versions")
+}
+
+model Document {
+  id               String         @id @default(uuid())
+  sourceId         String
+  projectId        String?
+  externalId       String?
+  title            String
+  path             String?
+  mimeType         String?
+  content          String?
+  contentHash      String?
+  size             BigInt         @default(0)
+  language         String?
+  metadata         Json           @default("{}")
+  chunkingStrategy String?
+  tokens           Int            @default(0)
+  status           DocumentStatus @default(PENDING)
+  parseError       String?
+  indexedAt        DateTime?
+  lastModified     DateTime?
+  webUrl           String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  sourceVersionId  String?
+  deletedAt        DateTime?
+  chunks           Chunk[]
+  project          Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source           Source         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceVersion    SourceVersion? @relation(fields: [sourceVersionId], references: [id])
+  entities         Entity[]
+
+  @@index([sourceId])
+  @@index([sourceVersionId])
+  @@index([contentHash])
+  @@index([status])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@index([language])
+  @@index([mimeType])
+  @@map("documents")
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model Chunk {
+  id              String                 @id @default(uuid())
+  documentId      String
+  projectId       String?
+  chunkOrder      Int?
+  chunkIndex      Int?
+  chunkType       String?
+  content         String
+  contentHash     String?
+  searchContent   String?
+  tokens          Int                    @default(0)
+  tokenCount      Int?
+  metadata        Json                   @default("{}")
+  keywords        String[]               @default([])
+  importanceScore Float                  @default(0.0)
+  parentChunkId   String?
+  sectionPath     String?
+  headingPath     String?
+  rerankScore     Float?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  embedding       Unsupported("vector")?
+  chunkMemories   ChunkMemory[]
+  document        Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  parentChunk     Chunk?                 @relation("ChunkHierarchy", fields: [parentChunkId], references: [id])
+  childChunks     Chunk[]                @relation("ChunkHierarchy")
+  project         Project?               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  embeddings      Embedding[]
+  memories        Memory[]               @relation("MemorySourceChunk")
+
+  @@index([documentId])
+  @@index([contentHash])
+  @@index([parentChunkId])
+  @@index([createdAt])
+  @@index([embedding])
+  @@index([projectId, chunkType], map: "chunks_project_chunk_type_idx")
+  @@index([projectId], map: "chunks_project_id_idx")
+  @@index([sectionPath])
+  @@map("chunks")
+}
+
+model Embedding {
+  id           String                @id @default(uuid())
+  chunkId      String
+  model        String
+  dimensions   Int
+  vector       Unsupported("vector")
+  sparseVector Json
+  createdAt    DateTime              @default(now())
+  chunk        Chunk                 @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+
+  @@index([chunkId])
+  @@index([model])
+  @@map("embeddings")
+}
+
+model Memory {
+  id                 String                 @id @default(uuid())
+  orgId              String?
+  projectId          String?
+  userId             String?
+  sessionId          String?
+  agentId            String?
+  memoryType         String                 @default("GENERAL")
+  content            String
+  metadata           Json                   @default("{}")
+  scope              String                 @default("USER")
+  importance         Float                  @default(0.5)
+  isActive           Boolean                @default(true)
+  accessCount        Int                    @default(0)
+  lastAccessedAt     DateTime?
+  lastRecalledAt     DateTime?
+  recallCount        Int                    @default(0)
+  derivedFromId      String?
+  expiresAt          DateTime?
+  documentDate       DateTime?
+  eventDate          DateTime?
+  entityMentions     String[]               @default([])
+  confidence         Float                  @default(0.8)
+  sourceChunkId      String?
+  version            Int                    @default(1)
+  validFrom          DateTime?              @default(now())
+  validUntil         DateTime?
+  supersededBy       String?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  embedding          Unsupported("vector")?
+  taskId             String?
+  project            Project?               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceChunk        Chunk?                 @relation("MemorySourceChunk", fields: [sourceChunkId], references: [id])
+  supersededByMemory Memory?                @relation("MemoryVersionChain", fields: [supersededBy], references: [id])
+  supersedes         Memory[]               @relation("MemoryVersionChain")
+  outgoingRelations  MemoryRelation[]       @relation("MemoryFrom")
+  incomingRelations  MemoryRelation[]       @relation("MemoryTo")
+
+  @@index([projectId])
+  @@index([orgId])
+  @@index([userId])
+  @@index([sessionId])
+  @@index([agentId])
+  @@index([taskId])
+  @@index([memoryType])
+  @@index([scope])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@index([validFrom, validUntil])
+  @@index([confidence])
+  @@index([supersededBy])
+  @@index([documentDate, eventDate])
+  @@index([embedding])
+  @@index([entityMentions])
+  @@index([projectId, isActive, expiresAt], map: "memories_project_active_expiry_idx")
+  @@index([projectId, userId, sessionId, isActive, expiresAt], map: "memories_project_user_session_active_expiry_idx")
+  @@index([sourceChunkId])
+  @@map("memories")
+}
+
+model MemoryRelation {
+  id           String   @id @default(uuid())
+  fromMemoryId String
+  toMemoryId   String
+  relationType String
+  confidence   Float    @default(0.8)
+  reasoning    String?
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  fromMemory   Memory   @relation("MemoryFrom", fields: [fromMemoryId], references: [id], onDelete: Cascade)
+  toMemory     Memory   @relation("MemoryTo", fields: [toMemoryId], references: [id], onDelete: Cascade)
+
+  @@unique([fromMemoryId, toMemoryId, relationType], map: "memory_relations_unique")
+  @@index([fromMemoryId])
+  @@index([toMemoryId])
+  @@index([fromMemoryId, toMemoryId])
+  @@index([relationType])
+  @@map("memory_relations")
+}
+
+model ChunkMemory {
+  id             String   @id @default(uuid())
+  chunkId        String
+  memoryId       String
+  relevanceScore Float    @default(0.0)
+  createdAt      DateTime @default(now())
+  chunk          Chunk    @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+
+  @@unique([chunkId, memoryId])
+  @@index([chunkId])
+  @@index([memoryId])
+  @@map("chunk_memories")
+}
+
+model Entity {
+  id                String                 @id @default(uuid())
+  documentId        String?
+  projectId         String?
+  name              String
+  type              String
+  entityType        String?
+  value             String?
+  description       String?
+  sourceChunkId     String?
+  parentId          String?
+  parentPath        String?
+  definitionPos     Json?
+  references        Json?
+  metadata          Json                   @default("{}")
+  signature         String?
+  accessLevel       String?
+  language          String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  embedding         Unsupported("vector")?
+  document          Document?              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  entities          Entity?                @relation("entitiesToentities", fields: [parentId], references: [id])
+  other_entities    Entity[]               @relation("entitiesToentities")
+  project           Project?               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  outgoingRelations EntityRelation[]       @relation("EntityFrom")
+  incomingRelations EntityRelation[]       @relation("EntityTo")
+
+  @@unique([projectId, name, entityType])
+  @@unique([documentId, name, type])
+  @@index([type])
+  @@index([documentId])
+  @@index([embedding])
+  @@index([name])
+  @@index([parentId])
+  @@index([parentPath])
+  @@map("entities")
+}
+
+model EntityRelation {
+  id           String   @id @default(uuid())
+  projectId    String?
+  fromEntityId String
+  toEntityId   String
+  relationType String
+  weight       Float?   @default(1.0)
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  fromEntity   Entity   @relation("EntityFrom", fields: [fromEntityId], references: [id], onDelete: Cascade)
+  project      Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  toEntity     Entity   @relation("EntityTo", fields: [toEntityId], references: [id], onDelete: Cascade)
+
+  @@unique([fromEntityId, toEntityId, relationType])
+  @@index([projectId])
+  @@index([fromEntityId])
+  @@index([relationType])
+  @@index([toEntityId])
+  @@map("entity_relations")
+}
+
+model Session {
+  id            String    @id @default(uuid())
+  orgId         String?
+  projectId     String?
+  sessionId     String?
+  userId        String?
+  agentId       String?
+  title         String?
+  systemPrompt  String?
+  contextId     String?
+  status        String    @default("ACTIVE")
+  lastMessageAt DateTime?
+  messageCount  Int       @default(0)
+  maxTokens     Int?
+  metadata      Json      @default("{}")
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  taskId        String?
+  messages      Message[]
+  project       Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([userId])
+  @@index([sessionId])
+  @@index([agentId])
+  @@index([createdAt])
+  @@index([orgId])
+  @@index([status])
+  @@index([taskId])
+  @@map("sessions")
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  sessionId      String?
+  conversationId String?
+  role           String
+  content        String
+  toolCalls      Json?
+  toolResults    Json?
+  contextUsed    Json?
+  tokens         Int?
+  latencyMs      Int?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  session        Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([role])
+  @@map("messages")
+}
+
+model SyncJob {
+  id               String    @id @default(uuid())
+  sourceId         String
+  type             String    @default("FULL")
+  status           String    @default("PENDING")
+  startedAt        DateTime?
+  completedAt      DateTime?
+  documentsTotal   Int       @default(0)
+  documentsIndexed Int       @default(0)
+  documentsFailed  Int       @default(0)
+  bytesProcessed   BigInt    @default(0)
+  errorMessage     String?
+  retryCount       Int       @default(0)
+  progress         Float     @default(0.0)
+  logs             Json      @default("[]")
+  createdAt        DateTime  @default(now())
+  sourceVersionId  String?
+  partialFailure   Boolean   @default(false)
+  warningCodes     String[]  @default([])
+  errorCode        String?
+  traceId          String?
+  parentTraceId    String?
+  sources          Source    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([type])
+  @@map("sync_jobs")
+}
+
+model IngestionJob {
+  id                  String                @id @default(uuid()) @db.VarChar(255)
+  org_id              String                @db.VarChar(255)
+  project_id          String                @db.VarChar(255)
+  user_id             String                @db.VarChar(255)
+  status              String                @default("PENDING") @db.VarChar(50)
+  total_documents     Int                   @default(0)
+  processed_documents Int                   @default(0)
+  total_chunks        Int                   @default(0)
+  processed_chunks    Int                   @default(0)
+  webhook_url         String?
+  metadata            Json?                 @default("{}")
+  started_at          DateTime?             @db.Timestamp(6)
+  completed_at        DateTime?             @db.Timestamp(6)
+  error               String?
+  created_at          DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at          DateTime?             @default(now()) @db.Timestamp(6)
+  ingestion_documents ingestion_documents[]
+
+  @@index([created_at], map: "idx_ingestion_jobs_created_at")
+  @@index([org_id], map: "idx_ingestion_jobs_org_id")
+  @@index([project_id], map: "idx_ingestion_jobs_project_id")
+  @@index([status], map: "idx_ingestion_jobs_status")
+  @@map("ingestion_jobs")
+}
+
+model ApiIdempotency {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  org_id          String
+  endpoint        String
+  idempotency_key String
+  request_hash    String
+  status_code     Int
+  response_body   Json     @default("{}")
+  expires_at      DateTime @db.Timestamp(6)
+  created_at      DateTime @default(now()) @db.Timestamp(6)
+  updated_at      DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([org_id, endpoint, idempotency_key], map: "api_idempotency_org_endpoint_key_unique")
+  @@index([expires_at])
+  @@index([org_id, endpoint], map: "api_idempotency_org_endpoint_idx")
+  @@map("api_idempotency")
+}
+
+model Webhook {
+  id              String    @id @default(uuid())
+  orgId           String
+  sourceId        String?
+  url             String
+  secret          String?
+  events          String[]
+  status          String    @default("ACTIVE")
+  isActive        Boolean   @default(true)
+  lastTriggeredAt DateTime?
+  lastDeliveredAt DateTime?
+  lastStatusCode  Int?
+  failureCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  sources         Source?   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([status])
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id            String   @id @default(uuid())
+  webhookId     String
+  event         String
+  payload       Json
+  statusCode    Int?
+  responseBody  String?
+  errorMessage  String?
+  deliveredAt   DateTime @default(now())
+  eventId       String?
+  action        String   @default("deliver")
+  attempt       Int      @default(1)
+  durationMs    Int?
+  errorCode     String?
+  traceId       String?
+  parentTraceId String?
+
+  @@index([webhookId])
+  @@index([deliveredAt])
+  @@index([eventId])
+  @@index([event])
+  @@map("webhook_deliveries")
+}
+
+model ChunkDocument {
+  id             String   @id
+  chunkId        String
+  documentId     String
+  relevanceScore Float    @default(0.0)
+  createdAt      DateTime @default(now())
+
+  @@index([chunkId])
+  @@index([documentId])
+}
+
+model DocumentChunk {
+  id         String   @id
+  documentId String
+  chunkId    String
+  position   Int
+  createdAt  DateTime @default(now())
+
+  @@unique([documentId, chunkId])
+  @@index([chunkId])
+  @@index([documentId])
+}
+
+model api_keys {
+  id            String        @id
+  keyId         String        @unique
+  keyPrefix     String        @unique
+  keyHash       String        @unique
+  name          String
+  orgId         String
+  userId        String?
+  scopes        String[]      @default([])
+  rateLimit     Int?
+  expiresAt     DateTime?
+  lastUsedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime
+  revokedAt     DateTime?
+  revoked       Boolean       @default(false)
+  isActive      Boolean       @default(true)
+  organizations organizations @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  users         users?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([keyPrefix])
+  @@index([orgId])
+  @@index([revoked, expiresAt])
+  @@index([userId])
+}
+
+model audit_logs {
+  id            String         @id
+  orgId         String?
+  userId        String?
+  action        String
+  resource      String?
+  metadata      Json           @default("{}")
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime       @default(now())
+  organizations organizations? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  users         users?         @relation(fields: [userId], references: [id])
+
+  @@index([orgId, action, createdAt(sort: Desc)])
+  @@index([orgId, createdAt, action])
+  @@index([userId])
+}
+
+model benchmark_results {
+  id               String   @id
+  repoOwner        String
+  repoName         String
+  repoStars        Int
+  repoLanguage     String
+  totalFindings    Int
+  criticalFindings Int
+  highFindings     Int
+  mediumFindings   Int
+  lowFindings      Int
+  scanDuration     Float
+  categories       Json     @default("{}")
+  scanId           String
+  scannedAt        DateTime @default(now())
+  competitorData   Json?
+  createdAt        DateTime @default(now())
+
+  @@index([repoOwner, repoName])
+  @@index([scannedAt])
+}
+
+model billing_events {
+  id            String        @id
+  orgId         String
+  stripeEventId String        @unique
+  type          String
+  payload       Json
+  createdAt     DateTime      @default(now())
+  organizations organizations @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([orgId, type])
+}
+
+model blog_posts {
+  id           String     @id
+  slug         String     @unique
+  title        String
+  excerpt      String
+  content      String
+  coverImage   String?
+  author       String
+  authorAvatar String?
+  publishedAt  DateTime?
+  featured     Boolean    @default(false)
+  tags         String[]
+  views        Int        @default(0)
+  readTime     Int
+  status       PostStatus @default(DRAFT)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime
+
+  @@index([publishedAt])
+  @@index([slug])
+  @@index([status])
+}
+
+model chat_conversations {
+  id              String          @id
+  userId          String
+  projectId       String?
+  title           String?
+  contextMetadata Json            @default("{}")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime
+  projects        Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  users           users           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat_messages   chat_messages[]
+
+  @@index([createdAt])
+  @@index([projectId])
+  @@index([userId])
+  @@index([userId, projectId, createdAt(sort: Desc)])
+}
+
+model chat_messages {
+  id                 String             @id
+  conversationId     String
+  userId             String
+  role               ChatRole
+  content            String
+  metadata           Json               @default("{}")
+  tokensUsed         Int?
+  modelUsed          String?
+  createdAt          DateTime           @default(now())
+  chat_conversations chat_conversations @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  users              users              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model codebase_indexes {
+  id                 String   @id
+  orgId              String
+  projectId          String
+  repoFullName       String
+  treeSha            String
+  indexVersion       Int      @default(2)
+  functions          Json     @default("[]")
+  classes            Json     @default("[]")
+  imports            Json     @default("[]")
+  securityControls   Json     @default("{}")
+  embeddings         Json     @default("[]")
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime
+  lastUsedAt         DateTime @default(now())
+  apiContracts       Json     @default("{}")
+  authGraph          Json     @default("{}")
+  businessLogic      Json     @default("{}")
+  codeQuality        Json     @default("{}")
+  configPatterns     Json     @default("{}")
+  dataFlowPaths      Json     @default("[]")
+  databaseSchema     Json     @default("{}")
+  dependencySecurity Json     @default("{}")
+  domainEntities     Json     @default("[]")
+  errorHandling      Json     @default("{}")
+  performanceHints   Json     @default("{}")
+  runtimePatterns    Json     @default("{}")
+  testCoverage       Json     @default("{}")
+  typeSystem         Json     @default("{}")
+
+  @@unique([projectId, treeSha])
+  @@index([orgId, projectId])
+  @@index([repoFullName])
+}
+
+model codebase_knowledge {
+  id         String   @id
+  orgId      String
+  projectId  String
+  category   String
+  key        String
+  value      Json
+  embedding  Json?
+  confidence Float    @default(0.8)
+  source     String   @default("auto")
+  usageCount Int      @default(0)
+  lastUsedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime
+
+  @@unique([projectId, category, key])
+  @@index([category])
+  @@index([orgId, projectId])
+}
+
+model device_codes {
+  id           String    @id
+  deviceCode   String    @unique
+  userCode     String    @unique
+  userId       String?
+  apiKey       String?
+  status       String    @default("pending")
+  expiresAt    DateTime
+  authorizedAt DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([deviceCode])
+  @@index([status, expiresAt])
+  @@index([userCode])
+}
+
+model docs {
+  id        String   @id
+  slug      String   @unique
+  title     String
+  content   String
+  category  String
+  order     Int      @default(0)
+  published Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([category])
+  @@index([slug])
+}
+
+model embedding_jobs {
+  id               String    @id @db.VarChar(255)
+  document_id      String?   @db.VarChar(255)
+  chunk_ids        Json?     @default("[]")
+  status           String    @default("PENDING") @db.VarChar(50)
+  total_chunks     Int       @default(0)
+  processed_chunks Int       @default(0)
+  error            String?
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  updated_at       DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([created_at], map: "idx_embedding_jobs_created_at")
+  @@index([document_id], map: "idx_embedding_jobs_document_id")
+  @@index([status], map: "idx_embedding_jobs_status")
+}
+
+model finding_history {
+  id        String         @id
+  findingId String
+  oldStatus FindingStatus?
+  newStatus FindingStatus
+  userId    String?
+  metadata  Json?
+  createdAt DateTime       @default(now())
+  findings  findings       @relation(fields: [findingId], references: [id], onDelete: Cascade)
+
+  @@index([findingId, createdAt(sort: Desc)])
+  @@index([findingId, newStatus, createdAt])
+}
+
+model findings {
+  id                                    String            @id
+  scanId                                String
+  cliFindingId                          String?
+  ruleId                                String?
+  filePath                              String
+  startLine                             Int
+  endLine                               Int?
+  columnStart                           Int?
+  columnEnd                             Int?
+  severity                              FindingSeverity   @default(MEDIUM)
+  category                              String?
+  title                                 String
+  description                           String?
+  evidence                              Json              @default("{}")
+  aiAnalysis                            Json              @default("{}")
+  fixSuggestion                         Json              @default("{}")
+  status                                FindingStatus     @default(OPEN)
+  assignedToId                          String?
+  verifiedFixed                         Boolean           @default(false)
+  falsePositive                         Boolean           @default(false)
+  createdAt                             DateTime          @default(now())
+  updatedAt                             DateTime
+  fingerprint                           String            @default("")
+  firstSeenScanId                       String?
+  lastSeenScanId                        String?
+  occurrenceCount                       Int               @default(1)
+  metadata                              Json              @default("{}")
+  finding_history                       finding_history[]
+  users                                 users?            @relation(fields: [assignedToId], references: [id])
+  scans_findings_firstSeenScanIdToscans scans?            @relation("findings_firstSeenScanIdToscans", fields: [firstSeenScanId], references: [id])
+  scans_findings_lastSeenScanIdToscans  scans?            @relation("findings_lastSeenScanIdToscans", fields: [lastSeenScanId], references: [id])
+  scans_findings_scanIdToscans          scans             @relation("findings_scanIdToscans", fields: [scanId], references: [id], onDelete: Cascade)
+  fix_sessions                          fix_sessions[]
+
+  @@index([assignedToId, status])
+  @@index([filePath])
+  @@index([fingerprint])
+  @@index([firstSeenScanId])
+  @@index([scanId, severity, createdAt])
+  @@index([scanId, status, severity])
+}
+
+model fix_sessions {
+  id                                       String           @id
+  findingId                                String
+  userId                                   String
+  fixType                                  String?
+  originalCode                             String
+  proposedFix                              String
+  fixExplanation                           String?
+  confidenceScore                          Float?
+  status                                   FixSessionStatus @default(GENERATED)
+  aiProvider                               String?
+  modelUsed                                String?
+  tokenUsage                               Json?
+  approvedById                             String?
+  approvedAt                               DateTime?
+  appliedById                              String?
+  appliedAt                                DateTime?
+  rolledBackById                           String?
+  rolledBackAt                             DateTime?
+  reviewNotes                              String?
+  rejectionReason                          String?
+  rollbackReason                           String?
+  createdAt                                DateTime         @default(now())
+  users_fix_sessions_appliedByIdTousers    users?           @relation("fix_sessions_appliedByIdTousers", fields: [appliedById], references: [id])
+  users_fix_sessions_approvedByIdTousers   users?           @relation("fix_sessions_approvedByIdTousers", fields: [approvedById], references: [id])
+  findings                                 findings         @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  users_fix_sessions_rolledBackByIdTousers users?           @relation("fix_sessions_rolledBackByIdTousers", fields: [rolledBackById], references: [id])
+  users_fix_sessions_userIdTousers         users            @relation("fix_sessions_userIdTousers", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([findingId])
+  @@index([status])
+  @@index([userId])
+}
+
+model historical_patterns {
+  id          String   @id
+  orgId       String
+  projectId   String?
+  patternType String
+  pattern     Json
+  outcome     String
+  confidence  Float    @default(0.5)
+  occurrences Int      @default(1)
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([orgId, patternType])
+  @@index([projectId, patternType])
+}
+
+model ingestion_documents {
+  id             String       @id @db.VarChar(255)
+  job_id         String       @db.VarChar(255)
+  project_id     String       @db.VarChar(255)
+  title          String?
+  content        String?
+  url            String?
+  metadata       Json?        @default("{}")
+  status         String       @default("PENDING") @db.VarChar(50)
+  document_id    String?      @db.VarChar(255)
+  error          String?
+  created_at     DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at     DateTime?    @default(now()) @db.Timestamp(6)
+  ingestion_jobs IngestionJob @relation(fields: [job_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([job_id], map: "idx_ingestion_documents_job_id")
+  @@index([project_id], map: "idx_ingestion_documents_project_id")
+  @@index([status], map: "idx_ingestion_documents_status")
+}
+
+model integrations {
+  id            String          @id
+  orgId         String
+  type          IntegrationType
+  name          String
+  config        Json            @default("{}")
+  enabled       Boolean         @default(true)
+  lastSyncAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime
+  organizations organizations   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, type, name])
+  @@index([orgId, type])
+}
+
+model learned_rules {
+  id           String   @id
+  orgId        String
+  repoFullName String?
+  ruleType     String
+  pattern      String
+  action       String
+  confidence   Float    @default(0.5)
+  usageCount   Int      @default(0)
+  lastUsedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@unique([orgId, repoFullName, pattern])
+  @@index([orgId])
+  @@index([ruleType])
+}
+
+model organization_invitations {
+  id            String           @id
+  orgId         String
+  email         String
+  role          OrganizationRole
+  invitedById   String?
+  token         String           @unique
+  status        InvitationStatus @default(PENDING)
+  expiresAt     DateTime?
+  createdAt     DateTime         @default(now())
+  users         users?           @relation(fields: [invitedById], references: [id])
+  organizations organizations    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, email])
+  @@index([invitedById])
+  @@index([orgId])
+}
+
+model organization_members {
+  id            String           @id
+  orgId         String
+  userId        String
+  role          OrganizationRole
+  permissions   Json             @default("{}")
+  joinedAt      DateTime         @default(now())
+  createdAt     DateTime         @default(now())
+  organizations organizations    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  users         users            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+}
+
+model organizations {
+  id                         String                     @id
+  name                       String
+  slug                       String                     @unique
+  settings                   Json                       @default("{}")
+  domain                     String?
+  plan                       OrganizationPlan           @default(FREE)
+  aiQuotaLimit               Int                        @default(5)
+  aiQuotaUsed                Int                        @default(0)
+  billingCycle               String                     @default("monthly")
+  billingEmail               String?
+  createdAt                  DateTime                   @default(now())
+  customBranding             Json?
+  dataRetentionDays          Int                        @default(90)
+  enforceSSO                 Boolean                    @default(false)
+  ipWhitelist                String[]
+  membersLimit               Int                        @default(3)
+  nextBillingDate            DateTime?
+  ownerId                    String
+  projectsLimit              Int                        @default(5)
+  requireMFA                 Boolean                    @default(false)
+  ssoConfig                  Json?
+  ssoEnabled                 Boolean                    @default(false)
+  ssoProvider                String?
+  stripeCustomerId           String?
+  subscriptionId             String?
+  subscriptionStatus         String?
+  updatedAt                  DateTime
+  isOnTrial                  Boolean                    @default(false)
+  pricePerSeat               Int                        @default(30)
+  pricingModel               String                     @default("per_seat")
+  seatCount                  Int                        @default(1)
+  trialEndsAt                DateTime?
+  trialStartedAt             DateTime?
+  website                    String?
+  whopSubscriptionId         String?
+  githubMarketplaceAccountId String?                    @unique
+  githubMarketplacePlanId    String?
+  billingCustomerId          String?
+  subscriptionPlan           String?
+  subscriptionRenewsAt       DateTime?
+  usageStats                 Json?
+  api_keys                   api_keys[]
+  audit_logs                 audit_logs[]
+  billing_events             billing_events[]
+  integrations               integrations[]
+  organization_invitations   organization_invitations[]
+  organization_members       organization_members[]
+  users                      users                      @relation(fields: [ownerId], references: [id])
+  oss_applications           oss_applications?
+  projects                   Project[]
+  security_policies          security_policies[]
+  sources                    Source[]
+  usage_metrics              usage_metrics[]
+
+  @@index([isOnTrial, trialEndsAt])
+  @@index([name])
+  @@index([ownerId])
+  @@index([subscriptionStatus, plan])
+}
+
+model oss_applications {
+  id               String               @id
+  repoUrl          String               @unique
+  owner            String
+  repo             String
+  license          String?
+  stars            Int                  @default(0)
+  forks            Int                  @default(0)
+  lastPushDate     DateTime?
+  email            String?
+  status           OSSApplicationStatus @default(PENDING)
+  orgId            String?              @unique
+  rejectionReason  String?
+  verificationData Json?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  organizations    organizations?       @relation(fields: [orgId], references: [id])
+
+  @@index([createdAt])
+  @@index([orgId])
+  @@index([status])
+}
+
+model package_versions {
+  id             String    @id
+  packageId      String
+  version        String
+  status         String    @default("PENDING")
+  documentsCount Int       @default(0)
+  indexedAt      DateTime?
+  releaseDate    DateTime?
+  tarballUrl     String?
+  dependencies   Json?     @default("[]")
+  createdAt      DateTime  @default(now())
+
+  @@unique([packageId, version])
+  @@index([status])
+}
+
+model packages {
+  id            String    @id
+  orgId         String
+  name          String
+  ecosystem     String
+  version       String
+  autoSync      Boolean   @default(true)
+  lastCheckedAt DateTime?
+  docsIndexed   Int       @default(0)
+  lastIndexedAt DateTime?
+  registryUrl   String?
+  packageJson   Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime
+
+  @@unique([orgId, ecosystem, name])
+  @@index([ecosystem])
+}
+
+model pr_comments {
+  id              String   @id
+  prReviewId      String
+  findingId       String?
+  githubCommentId Int?
+  body            String
+  path            String?
+  line            Int?
+  reactions       Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime
+
+  @@index([findingId])
+  @@index([githubCommentId])
+  @@index([prReviewId])
+}
+
+model pr_reviews {
+  id             String         @id
+  orgId          String
+  repoFullName   String
+  prNumber       Int
+  baseBranch     String
+  headBranch     String
+  headCommitSha  String
+  status         PRReviewStatus @default(QUEUED)
+  scanId         String?        @unique
+  commentsPosted Json           @default("[]")
+  reviewSummary  Json           @default("{}")
+  errorMessage   String?
+  retryCount     Int            @default(0)
+  webhookPayload Json           @default("{}")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  @@unique([repoFullName, prNumber, headCommitSha])
+  @@index([orgId, status])
+  @@index([repoFullName, prNumber])
+  @@index([status, createdAt])
+}
+
+model pr_summaries {
+  id              String   @id
+  orgId           String
+  prReviewId      String   @unique
+  repoFullName    String
+  prNumber        Int
+  title           String
+  description     String
+  changedFiles    Json     @default("[]")
+  impactAreas     Json     @default("[]")
+  riskLevel       String   @default("low")
+  diagram         String?
+  keyChanges      Json     @default("[]")
+  breakingChanges Json     @default("[]")
+  testCoverage    Json     @default("{}")
+  createdAt       DateTime @default(now())
+
+  @@index([orgId])
+  @@index([repoFullName, prNumber])
+}
+
+model query_cache {
+  id        String   @id
+  projectId String
+  queryHash String
+  query     String
+  results   Json     @default("[]")
+  hitCount  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, queryHash])
+  @@index([expiresAt])
+  @@index([projectId, expiresAt], map: "query_cache_project_expires_idx")
+}
+
+model repo_configs {
+  id           String   @id
+  orgId        String
+  repoFullName String   @unique
+  configSha    String?
+  config       Json     @default("{}")
+  rawContent   String?
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+
+  @@index([orgId])
+}
+
+model reports {
+  id         String       @id
+  scan_id    String?
+  project_id String?
+  user_id    String
+  format     ReportFormat
+  file_name  String
+  file_path  String
+  file_size  Int          @default(0)
+  metadata   Json         @default("{}")
+  status     ReportStatus @default(COMPLETED)
+  created_at DateTime     @default(now())
+  updated_at DateTime
+  projects   Project?     @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  scans      scans?       @relation(fields: [scan_id], references: [id], onDelete: Cascade)
+  users      users        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([created_at(sort: Desc)])
+  @@index([format])
+  @@index([project_id])
+  @@index([scan_id])
+  @@index([user_id])
+}
+
+model research_sessions {
+  id              String    @id
+  orgId           String
+  userId          String?
+  title           String
+  question        String
+  status          String    @default("INITIATED")
+  currentStep     Int       @default(0)
+  totalSteps      Int?
+  answer          String?
+  sourcesUsed     String[]
+  queriesExecuted Int       @default(0)
+  totalLatencyMs  Int?
+  tokensUsed      Int?
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  @@index([createdAt])
+  @@index([orgId])
+  @@index([status])
+  @@index([userId])
+}
+
+model research_steps {
+  id            String   @id
+  sessionId     String
+  stepOrder     Int
+  stepType      String
+  input         String
+  output        String?
+  documentsUsed String[]
+  webResults    Json?
+  latencyMs     Int?
+  tokensUsed    Int?
+  createdAt     DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([stepOrder])
+}
+
+model review_feedback {
+  id           String       @id
+  orgId        String
+  findingId    String
+  scanId       String
+  repoFullName String
+  feedbackType FeedbackType
+  comment      String?
+  rulePattern  String?
+  filePath     String?
+  lineNumber   Int?
+  userId       String
+  createdAt    DateTime     @default(now())
+
+  @@index([orgId])
+  @@index([repoFullName])
+  @@index([rulePattern])
+}
+
+model reviewed_commits {
+  id               String   @id
+  orgId            String
+  repoFullName     String
+  prNumber         Int
+  commitSha        String
+  scanId           String?
+  reviewedAt       DateTime @default(now())
+  findingsSnapshot Json     @default("{}")
+
+  @@unique([repoFullName, prNumber, commitSha])
+  @@index([commitSha])
+  @@index([repoFullName, prNumber])
+}
+
+model scan_comparisons {
+  id                                           String   @id
+  projectId                                    String
+  currentScanId                                String
+  previousScanId                               String
+  newFindings                                  Int      @default(0)
+  fixedFindings                                Int      @default(0)
+  unchangedFindings                            Int      @default(0)
+  comparisonData                               Json     @default("{}")
+  createdAt                                    DateTime @default(now())
+  scans_scan_comparisons_currentScanIdToscans  scans    @relation("scan_comparisons_currentScanIdToscans", fields: [currentScanId], references: [id], onDelete: Cascade)
+  scans_scan_comparisons_previousScanIdToscans scans    @relation("scan_comparisons_previousScanIdToscans", fields: [previousScanId], references: [id], onDelete: Cascade)
+  projects                                     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([currentScanId, previousScanId])
+  @@index([projectId, createdAt])
+}
+
+model scan_jobs {
+  id          String    @id
+  status      String    @default("queued")
+  payload     Json
+  result      Json?
+  error       String?
+  progress    Json      @default("{\"totalFiles\": 0, \"processedFiles\": 0}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+  startedAt   DateTime?
+  completedAt DateTime?
+  logs        Json?
+
+  @@index([status, createdAt])
+  @@index([updatedAt])
+}
+
+model scans {
+  id                                                      String             @id
+  projectId                                               String
+  cliScanId                                               String?
+  triggeredById                                           String?
+  branch                                                  String
+  commitSha                                               String
+  scanType                                                ScanType           @default(FULL)
+  status                                                  ScanStatus         @default(PENDING)
+  staticFindingsCount                                     Int                @default(0)
+  aiFindingsCount                                         Int                @default(0)
+  severityCounts                                          Json               @default("{}")
+  performanceMetrics                                      Json               @default("{}")
+  startedAt                                               DateTime?
+  completedAt                                             DateTime?
+  createdAt                                               DateTime           @default(now())
+  findings_findings_firstSeenScanIdToscans                findings[]         @relation("findings_firstSeenScanIdToscans")
+  findings_findings_lastSeenScanIdToscans                 findings[]         @relation("findings_lastSeenScanIdToscans")
+  findings_findings_scanIdToscans                         findings[]         @relation("findings_scanIdToscans")
+  reports                                                 reports[]
+  scan_comparisons_scan_comparisons_currentScanIdToscans  scan_comparisons[] @relation("scan_comparisons_currentScanIdToscans")
+  scan_comparisons_scan_comparisons_previousScanIdToscans scan_comparisons[] @relation("scan_comparisons_previousScanIdToscans")
+  projects                                                Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  users                                                   users?             @relation(fields: [triggeredById], references: [id])
+
+  @@index([projectId, branch, createdAt(sort: Desc)])
+  @@index([projectId, status, completedAt(sort: Desc)])
+  @@index([status])
+}
+
+model search_logs {
+  id                 String   @id
+  orgId              String
+  userId             String?
+  sessionId          String?
+  query              String
+  queryType          String   @default("SEMANTIC")
+  resultsCount       Int      @default(0)
+  resultIds          String[]
+  semanticResults    Int      @default(0)
+  keywordResults     Int      @default(0)
+  graphResults       Int      @default(0)
+  totalLatencyMs     Int
+  embeddingLatencyMs Int?
+  searchLatencyMs    Int?
+  rerankLatencyMs    Int?
+  clickedResultId    String?
+  feedback           String?
+  createdAt          DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([orgId])
+  @@index([queryType])
+  @@index([sessionId])
+  @@index([userId])
+}
+
+model security_policies {
+  id            String        @id
+  orgId         String
+  name          String
+  description   String?
+  rules         Json
+  enabled       Boolean       @default(true)
+  createdById   String?
+  version       Int           @default(1)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime
+  users         users?        @relation(fields: [createdById], references: [id])
+  organizations organizations @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, name])
+  @@index([enabled])
+}
+
+model trust_scores {
+  id            String   @id
+  mint          String   @unique
+  tokenName     String   @default("Unknown")
+  tokenSymbol   String   @default("???")
+  tokenImage    String   @default("")
+  trustScore    Int
+  trustGrade    String
+  rugged        Boolean  @default(false)
+  risks         Json     @default("[]")
+  onChain       Json     @default("{}")
+  rugCheckScore Int      @default(0)
+  scannedAt     DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+
+  @@index([scannedAt])
+  @@index([trustGrade])
+}
+
+model usage_events {
+  id              String   @id
+  orgId           String
+  projectId       String?
+  eventType       String
+  source          String?
+  tokensUsed      Int      @default(0)
+  embeddingTokens Int      @default(0)
+  latencyMs       Int      @default(0)
+  requestCount    Int      @default(1)
+  timestamp       DateTime @default(now())
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+
+  @@index([orgId, createdAt])
+  @@index([orgId, eventType])
+  @@index([projectId])
+}
+
+model usage_metrics {
+  id            String        @id
+  orgId         String
+  userId        String?
+  type          UsageType
+  count         Int
+  model         String?
+  contextId     String?
+  timestamp     DateTime      @default(now())
+  organizations organizations @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, type, timestamp(sort: Desc)])
+  @@index([userId, type])
+}
+
+model usage_records {
+  id                  String   @id
+  orgId               String
+  period              String
+  queriesCount        Int      @default(0)
+  documentsIndexed    Int      @default(0)
+  tokensProcessed     BigInt   @default(0)
+  embeddingsGenerated BigInt   @default(0)
+  storageBytes        BigInt   @default(0)
+  webSearches         Int      @default(0)
+  packageSearches     Int      @default(0)
+  researchQueries     Int      @default(0)
+  quotaLimit          Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime
+
+  @@unique([orgId, period])
+  @@index([period])
+}
+
+model user_sessions {
+  id        String   @id
+  userId    String
+  tokenHash String   @unique
+  device    String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  users     users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId])
+}
+
+model users {
+  id                                              String                     @id
+  email                                           String                     @unique
+  name                                            String                     @default("")
+  avatarUrl                                       String?
+  cliApiKey                                       String?                    @unique
+  passwordHash                                    String?
+  emailVerified                                   Boolean                    @default(false)
+  preferences                                     Json                       @default("{}")
+  mfaEnabled                                      Boolean                    @default(false)
+  hasSeenOnboarding                               Boolean                    @default(false)
+  createdAt                                       DateTime                   @default(now())
+  updatedAt                                       DateTime
+  lastsigninAt                                    DateTime?
+  signinCount                                     Int                        @default(0)
+  whopUserId                                      String?                    @unique
+  githubId                                        String?                    @unique
+  api_keys                                        api_keys[]
+  audit_logs                                      audit_logs[]
+  chat_conversations                              chat_conversations[]
+  chat_messages                                   chat_messages[]
+  findings                                        findings[]
+  fix_sessions_fix_sessions_appliedByIdTousers    fix_sessions[]             @relation("fix_sessions_appliedByIdTousers")
+  fix_sessions_fix_sessions_approvedByIdTousers   fix_sessions[]             @relation("fix_sessions_approvedByIdTousers")
+  fix_sessions_fix_sessions_rolledBackByIdTousers fix_sessions[]             @relation("fix_sessions_rolledBackByIdTousers")
+  fix_sessions_fix_sessions_userIdTousers         fix_sessions[]             @relation("fix_sessions_userIdTousers")
+  organization_invitations                        organization_invitations[]
+  organization_members                            organization_members[]
+  organizations                                   organizations[]
+  reports                                         reports[]
+  scans                                           scans[]
+  security_policies                               security_policies[]
+  user_sessions                                   user_sessions[]
+
+  @@index([cliApiKey])
+  @@index([createdAt])
+}
+
+model wizard_events {
+  id             String   @id
+  orgId          String?
+  projectId      String?
+  session_id     String
+  install_id     String
+  wizard_version String
+  event_name     String
+  step           String?
+  success        Boolean  @default(true)
+  stack          String?
+  connector      String?
+  error_code     String?
+  duration_ms    Int?
+  metadata       Json     @default("{}")
+  created_at     DateTime @default(now())
+
+  @@index([created_at])
+  @@index([event_name, created_at])
+  @@index([orgId, created_at])
+  @@index([session_id, created_at])
+}
+
+enum SourceStatus {
+  PENDING
+  CONNECTING
+  INDEXING
+  READY
+  ERROR
+  DISABLED
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  ERROR
+  EXCLUDED
+}
+
+enum ChatRole {
+  USER
+  AI
+  SYSTEM
+}
+
+enum FeedbackType {
+  DISMISS
+  FALSE_POSITIVE
+  HELPFUL
+  APPLIED_FIX
+  CUSTOM_RULE
+}
+
+enum FindingSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFORMATIONAL
+}
+
+enum FindingStatus {
+  OPEN
+  FIXED
+  IGNORED
+  FALSE_POSITIVE
+  RISK_ACCEPTED
+  IN_PROGRESS
+}
+
+enum FixSessionStatus {
+  GENERATED
+  APPROVED
+  APPLIED
+  ROLLED_BACK
+  REJECTED
+}
+
+enum IntegrationType {
+  GITHUB
+  GITLAB
+  BITBUCKET
+  JIRA
+  SLACK
+  TEAMS
+  WEBHOOK
+  OKTA
+  AZURE_AD
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum OSSApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum OrganizationPlan {
+  FREE
+  OSS
+  PAY_AS_YOU_GO
+  ENTERPRISE
+  PRO
+  SCALE
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+  SECURITY_ENGINEER
+  AUDITOR
+}
+
+enum PRReviewStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ReportFormat {
+  JSON
+  HTML
+  MARKDOWN
+  PDF
+}
+
+enum ReportStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum ScanType {
+  FULL
+  DELTA
+  PR
+}
+
+enum SourceVersionStatus {
+  STAGED
+  PROMOTING
+  ACTIVE
+  SUPERSEDED
+  FAILED
+}
+
+enum SyncMode {
+  MANUAL
+  SCHEDULED
+  REALTIME
+}
+
+enum UsageType {
+  AI_TOKEN_COUNT
+  SCAN_COUNT
+  FIX_GENERATION_COUNT
+  CHAT_MESSAGE_COUNT
+}

@@ -1,0 +1,109 @@
+{
+  "captured_at": "2026-08-03T00:55:56.252835+00:00",
+  "captured_by": "benchmark/capture_serving_envelope.py (in-container probe)",
+  "configured": {
+    "answer_model_alias": "qwen3.5-4b",
+    "embed_base_url": "http://vllm-embed:8000/v1",
+    "embed_model_alias": "gte-modernbert-base",
+    "gen_base_url": "http://vllm-gen:8000/v1"
+  },
+  "image": {
+    "note": "null means the launcher did not export BENCH_SERVING_IMAGE* \u2014 benchmark/docker/run_shards.sh exports them via `docker inspect`; a manual `docker compose run` does not.",
+    "vllm_embed_image": "vllm/vllm-openai:v0.25.1",
+    "vllm_embed_image_digest": "vllm/vllm-openai@sha256:e4f88a835143cd22aee2397a26ec6bb80b3a4a6fe0c882bcbc63822904766089",
+    "vllm_gen_image": "vllm/vllm-openai@sha256:9894a751bdd23059d922cab4d4a27e826fb0a69dad743bab6346dcb7c801533e",
+    "vllm_gen_image_digest": "vllm/vllm-openai@sha256:9894a751bdd23059d922cab4d4a27e826fb0a69dad743bab6346dcb7c801533e"
+  },
+  "ok": true,
+  "provider": "hindsight",
+  "run_tag": "v5ftc086_p0",
+  "summary": {
+    "embed_checkpoint_roots": [
+      "Alibaba-NLP/gte-modernbert-base"
+    ],
+    "embed_served_ids": [
+      "gte-modernbert-base"
+    ],
+    "gen_checkpoint_roots": [
+      "AxionML/Qwen3.5-4B-NVFP4"
+    ],
+    "gen_engine_version": "0.23.1rc1.dev1373+g387189c42",
+    "gen_served_ids": [
+      "qwen3.5-4b"
+    ]
+  },
+  "vllm_embed": {
+    "base_url": "http://vllm-embed:8000/v1",
+    "errors": {},
+    "models": {
+      "data": [
+        {
+          "created": 1785718556,
+          "id": "gte-modernbert-base",
+          "max_model_len": 8192,
+          "object": "model",
+          "owned_by": "vllm",
+          "parent": null,
+          "permission": [
+            {
+              "allow_create_engine": false,
+              "allow_fine_tuning": false,
+              "allow_logprobs": true,
+              "allow_sampling": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "created": 1785718556,
+              "group": null,
+              "id": "modelperm-b6064e22cee7f2ea",
+              "is_blocking": false,
+              "object": "model_permission",
+              "organization": "*"
+            }
+          ],
+          "root": "Alibaba-NLP/gte-modernbert-base"
+        }
+      ],
+      "object": "list"
+    },
+    "version": {
+      "version": "0.25.1"
+    }
+  },
+  "vllm_gen": {
+    "base_url": "http://vllm-gen:8000/v1",
+    "errors": {},
+    "models": {
+      "data": [
+        {
+          "created": 1785718556,
+          "id": "qwen3.5-4b",
+          "max_model_len": 131072,
+          "object": "model",
+          "owned_by": "vllm",
+          "parent": null,
+          "permission": [
+            {
+              "allow_create_engine": false,
+              "allow_fine_tuning": false,
+              "allow_logprobs": true,
+              "allow_sampling": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "created": 1785718556,
+              "group": null,
+              "id": "modelperm-af20566196e8d430",
+              "is_blocking": false,
+              "object": "model_permission",
+              "organization": "*"
+            }
+          ],
+          "root": "AxionML/Qwen3.5-4B-NVFP4"
+        }
+      ],
+      "object": "list"
+    },
+    "version": {
+      "version": "0.23.1rc1.dev1373+g387189c42"
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "system": "honcho",
+  "scored_questions": 3750,
+  "question_rows_in_file": 3750,
+  "unroutable_rows": {},
+  "judge_methods": {
+    "llm_judge": 3740,
+    "missing_answer": 10
+  },
+  "overall": {
+    "micro": {
+      "AA": 0.5945333333333334,
+      "SEH@3": 0.904,
+      "SEH@5": 0.928,
+      "log_rank@3": 0.8247858240009567,
+      "EUG_gap@3": 0.30946666666666667,
+      "EUG@5": 0.6464080459770115
+    },
+    "macro_memconflict_protocol": {
+      "AA": 0.47660873704661894,
+      "SEH@3": 0.8078950131394124,
+      "SEH@5": 0.8495732494205,
+      "log_rank@3": 0.6505092070434992,
+      "EUG_gap@3": 0.3312862760927934,
+      "EUG@5": 0.5792629276060429
+    }
+  },
+  "by_conflict_type": {
+    "dynamic_conflict": {
+      "N": 2946,
+      "AA": 0.6434147997284454,
+      "SEH@3": 0.9521384928716904,
+      "SEH@5": 0.9674134419551935,
+      "N_at_5": 2946,
+      "log_rank@3": 0.9102188499260516,
+      "EUG_gap@3": 0.308723693143245,
+      "EUG@5": 0.6701754385964912,
+      "EUG@5_N": 2850,
+      "diagnostic": {
+        "UOCS": 0.7684996605566871
+      }
+    },
+    "static_conflict": {
+      "N": 360,
+      "AA": 0.18055555555555555,
+      "SEH@3": 0.8138888888888889,
+      "SEH@5": 0.8583333333333333,
+      "N_at_5": 360,
+      "log_rank@3": 0.605940313015886,
+      "EUG_gap@3": 0.6333333333333333,
+      "EUG@5": 0.2669902912621359,
+      "EUG@5_N": 309,
+      "diagnostic": {
+        "CRS": 0.6722222222222223
+      }
+    },
+    "conditional_conflict": {
+      "N": 444,
+      "AA": 0.6058558558558559,
+      "SEH@3": 0.6576576576576577,
+      "SEH@5": 0.722972972972973,
+      "N_at_5": 444,
+      "log_rank@3": 0.43536845818856,
+      "EUG_gap@3": 0.05180180180180183,
+      "EUG@5": 0.8006230529595015,
+      "EUG@5_N": 321,
+      "diagnostic": null
+    }
+  },
+  "metric_notes": {
+    "EUG_gap@3": "upstream MemConflict EUG: SEH@3 - AA per type; macro value = Average_EUG",
+    "EUG@5": "this repo only: mean AA over questions whose gold evidence reached rank <= 5"
+  }
+}

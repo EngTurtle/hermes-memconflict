@@ -1,0 +1,9 @@
+provider,tag,number_of_questions,correct,partial_correct,blank,incorrect,cached_input_per_turn,uncached_input_per_turn,output_tokens_total,token_restart_caveat
+Honcho,v5ftc,3750,2251,501,726,272,5528.9,7588.6,42546584,clean (pool log: all 30 exited 0)
+mem0,v5ftc,3750,1605,506,922,717,7489.0,1829.8,17148227,"inflated ~1% (persona 1 failed at ~session 20, relaunched from session 0)"
+Supermemory,v5ftc,3750,1075,585,1463,627,1796.0,590.0,18328682,"inflated ~10-20% (9 failed persona attempts in window, bounded estimate)"
+Hindsight (2nd arm),v5ftcall,3750,1808,507,877,558,384.6,1942.2,21469851,"inflated ~3% (persona 26 failed near-complete, relaunched; 30-wide false start excluded by window start)"
+RetainDB server,v5ftc,3750,1147,792,1323,488,468.3,3153.8,52781967,"no restarts; ~0.6% foreign traffic in window (documented, left in)"
+Hindsight (featured),v5ftc086,3750,1508,524,1095,623,438.3,2189.2,21967822,clean (pool log: all 30 exited 0)
+OpenViking,v5ftovk,3750,614,356,2516,264,364.0,1037.7,19345376,"inflated ~15-20% (9 failed attempts across 8 personas, most past session 38; bounded estimate)"
+Mnemosyne,v5ftc,3750,910,722,1880,238,0.0,116.3,9825512,"clean (single container, no relaunches)"

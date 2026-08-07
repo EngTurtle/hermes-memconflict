@@ -1,0 +1,8 @@
+# Container-critical files must stay LF regardless of the checkout platform.
+# A CRLF shebang (`#!/usr/bin/env bash\r`) breaks the entrypoint inside Linux
+# containers, so pin shell scripts + the Docker files to LF explicitly.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+docker-compose.yml text eol=lf
+.dockerignore   text eol=lf
