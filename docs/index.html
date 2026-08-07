@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Benchmark report and dataset browser for a comparison of self-hostable memory providers for the Hermes agent on MemConflict.">
+  <title>Hermes memory benchmark on MemConflict</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f1e9;
+      --ink: #161a1d;
+      --muted: #5d615f;
+      --line: #c8c3b7;
+      --card: #fbfaf6;
+      --navy: #17324d;
+      --teal: #0d776e;
+      --red-dark: #85261f;
+      --shadow: 0 1px 0 rgba(22, 26, 29, 0.08), 0 12px 36px rgba(22, 26, 29, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(22, 26, 29, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 100% 28px;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.62;
+    }
+    main { max-width: 46rem; margin: 0 auto; padding: 4rem 1.25rem 5rem; }
+    a { color: var(--navy); text-underline-offset: 0.18em; }
+    a:hover { color: var(--red-dark); }
+    .mark {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      padding: 0.25rem 0.5rem;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      color: var(--teal);
+      background: var(--card);
+    }
+    h1 { font-size: clamp(1.9rem, 5vw, 2.6rem); line-height: 1.15; margin: 1.2rem 0 0.6rem; }
+    .lede { font-size: 1.08rem; color: var(--muted); margin: 0 0 2.5rem; }
+    .cards { display: grid; gap: 1.1rem; grid-template-columns: 1fr; }
+    @media (min-width: 40rem) { .cards { grid-template-columns: 1fr 1fr; } }
+    .card {
+      display: block;
+      padding: 1.4rem 1.4rem 1.5rem;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+      text-decoration: none;
+      color: inherit;
+    }
+    .card:hover { border-color: var(--navy); }
+    .card h2 { margin: 0.5rem 0 0.4rem; font-size: 1.2rem; }
+    .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+    .kicker {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--teal);
+      font-weight: 600;
+    }
+    .note { margin-top: 0.9rem; font-size: 0.85rem; color: var(--muted); }
+    h3 { margin: 3rem 0 0.6rem; font-size: 1rem; letter-spacing: 0.02em; }
+    ul { margin: 0; padding-left: 1.1rem; color: var(--muted); }
+    li { margin-bottom: 0.35rem; }
+    footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line); font-size: 0.88rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="mark">M/7</span>
+    <h1>Hermes memory benchmark on MemConflict</h1>
+    <p class="lede">
+      A comparison of self-hostable memory providers for the Hermes agent, measured on the
+      MemConflict benchmark: 30 personas and 3,750 questions about changing, contradictory,
+      and condition-bound memories.
+    </p>
+
+    <div class="cards">
+      <a class="card" href="report/">
+        <span class="kicker">Report</span>
+        <h2>Benchmark results</h2>
+        <p>Per-provider accuracy, retrieval quality, failure analysis, workload cost, and the method behind the numbers.</p>
+      </a>
+      <a class="card" href="memconflict-sessions/">
+        <span class="kicker">Dataset</span>
+        <h2>Conversation browser</h2>
+        <p>Read the MemConflict dialogues as chat transcripts, with each session's conflict annotations and questions.</p>
+      </a>
+    </div>
+    <p class="note">
+      The conversation browser loads the full dataset as one 40 MB script. Give it a moment on a slow connection.
+    </p>
+
+    <h3>Source documents</h3>
+    <ul>
+      <li><a href="BENCHMARK_MATRIX.md">BENCHMARK_MATRIX.md</a>: providers, arms, flags, and every measured number.</li>
+      <li><a href="DECISIONS.md">DECISIONS.md</a>: why the harness is built this way, including reversed decisions.</li>
+      <li><a href="TROUBLESHOOTING.md">TROUBLESHOOTING.md</a>: symptom, cause, fix, and what did not work.</li>
+    </ul>
+
+    <footer>
+      Code and data: <a href="https://github.com/EngTurtle/hermes-memconflict">github.com/EngTurtle/hermes-memconflict</a>.
+      Benchmark: <a href="https://github.com/TaoZhen1110/MemConflict">MemConflict</a>.
+    </footer>
+  </main>
+</body>
+</html>

@@ -4,7 +4,8 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const reportDir = path.dirname(fileURLToPath(import.meta.url));
-const benchmarkDir = path.dirname(reportDir);
+// The report sits at docs/report/, the source CSVs stay at benchmark/Scores/.
+const benchmarkDir = path.join(reportDir, "..", "..", "benchmark");
 const errors = [];
 
 function csvRows(filePath) {
