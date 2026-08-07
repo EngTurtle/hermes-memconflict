@@ -105,7 +105,7 @@ window").
 ```mermaid
 xychart-beta
     title "Contract v5 featured: macro answer accuracy (gemma-4-12b penalty rubric, wrong=-1)"
-    x-axis ["Honcho", "mem0", "Supermemory", "RetainDB server", "Hindsight", "OpenViking", "Mnemosyne"]
+    x-axis ["Honcho", "mem0", "Supermemory", "RetainDB", "Hindsight", "OpenViking", "Mnemosyne"]
     y-axis "Macro answer accuracy" 0 --> 0.5
     bar [0.477, 0.392, 0.288, 0.270, 0.218, 0.132, 0.116]
 ```
