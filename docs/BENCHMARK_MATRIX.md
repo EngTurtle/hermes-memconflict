@@ -8,6 +8,11 @@ listed.
 
 Dataset: `external/MemConflict/Data/Step4_4.jsonl`, 30 personas, 3,750 questions.
 
+The published report at <https://engturtle.github.io/hermes-memconflict/report/>
+presents these results as charts and per-provider notes. The repository README at
+<https://github.com/EngTurtle/hermes-memconflict> covers the harness that
+produced them.
+
 Headline metric: macro answer accuracy, the unweighted mean of answer accuracy
 over the three conflict types (dynamic, static, conditional). Answer accuracy is
 the fraction of questions whose final answer matches the gold answer. Supporting

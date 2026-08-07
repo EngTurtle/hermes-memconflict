@@ -40,6 +40,8 @@
 
   --shadow-sm: 0 1px 2px rgba(20, 22, 30, 0.06);
   --shadow-md: 0 4px 16px rgba(20, 22, 30, 0.08);
+
+  --site-bar-height: 44px;
 }
 
 * {
@@ -67,13 +69,62 @@ body {
 }
 
 /* ==========================================================================
+   Site bar: links to the other pages, above the app shell
+   ========================================================================== */
+
+.site-bar {
+  height: var(--site-bar-height);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--bg-pane);
+  border-bottom: 1px solid var(--border-color);
+  /* beats .pane-details' fixed z-index: 20 (style.css @media 900px), so the
+     drawer cannot slide over the bar */
+  z-index: 30;
+  position: relative;
+}
+
+.site-bar-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.site-bar-brand {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.site-bar-brand-short {
+  display: none;
+}
+
+.site-bar-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.site-bar-brand:hover,
+.site-bar-link:hover {
+  color: var(--accent-strong);
+}
+
+/* ==========================================================================
    App shell — CSS grid, up to 4 columns
    ========================================================================== */
 
 #app {
   display: grid;
   grid-template-columns: 260px 300px 1fr;
-  height: 100vh;
+  /* #app takes its height from the viewport, not from body, so it does not
+     shrink for .site-bar above it. At a plain 100vh the document grows past
+     the viewport, gains a scrollbar, and clips the grid by the bar height. */
+  height: calc(100vh - var(--site-bar-height));
   width: 100vw;
   overflow: hidden;
 }
@@ -705,7 +756,9 @@ body {
 
   .pane-details {
     position: fixed;
-    top: 0;
+    /* fixed positioning leaves the #app grid, so the calc() above does not
+       reach the drawer. Pin it below .site-bar, not at the viewport top. */
+    top: var(--site-bar-height);
     right: 0;
     bottom: 0;
     width: min(340px, 88vw);
@@ -735,5 +788,24 @@ body {
   .persona-row,
   .session-row {
     padding: 10px 12px;
+  }
+
+  .site-bar {
+    padding: 0 12px;
+  }
+
+  .site-bar-nav {
+    gap: 10px;
+  }
+
+  /* the full project name does not fit beside Report and GitHub at 360px.
+     Swap to the short form. Do not shrink --site-bar-height instead: the
+     #app calc() and the drawer top offset both read it. */
+  .site-bar-brand-full {
+    display: none;
+  }
+
+  .site-bar-brand-short {
+    display: inline;
   }
 }

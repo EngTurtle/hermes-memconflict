@@ -87,8 +87,11 @@ const html = fs.readFileSync(path.join(reportDir, "index.html"), "utf8");
 for (const required of ["outcome-chart", "conflict-outcome-chart", "conflict-outcome-select", "risk-scatter", "conflict-chart", "session-charts", "provider-cards", "cost-chart", "cost-score-chart", "cost-caveats", "outcome-table", "conflict-outcome-table", "session-table"]) {
   if (!html.includes(`id="${required}"`)) errors.push(`Missing report element #${required}`);
 }
-if (/github\.com\/EngTurtle|private_testing|private-testing/i.test(html)) {
-  errors.push("Private repository identifier leaked into report HTML");
+// The repository is public as of 2026-08-07, so a github.com/EngTurtle link is
+// expected in the footer and sources block. Only the private-testing tag, used
+// for pre-publication artifact paths, still means a leak.
+if (/private_testing|private-testing/i.test(html)) {
+  errors.push("Private-testing identifier leaked into report HTML");
 }
 const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]));
 for (const match of html.matchAll(/href="#([^"]+)"/g)) {

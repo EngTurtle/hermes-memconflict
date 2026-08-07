@@ -5,6 +5,11 @@ decision, the mechanism it acts on, and the evidence behind it. [Reversed](#reve
 lists decisions that were later overturned; they stay on record because the
 reasoning that produced them is easy to repeat.
 
+The published report at <https://engturtle.github.io/hermes-memconflict/report/>
+states the method these decisions produced. The repository README at
+<https://github.com/EngTurtle/hermes-memconflict> covers the project scope and
+layout.
+
 ---
 
 ## Fairness

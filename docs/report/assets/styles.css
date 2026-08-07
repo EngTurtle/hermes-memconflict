@@ -109,6 +109,15 @@ nav a {
 }
 .mobile-nav { display: none; }
 
+.site-links {
+  gap: 0.85rem;
+  margin-right: auto;
+  margin-left: 1.25rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--line);
+}
+.site-links a { font-size: 0.7rem; }
+
 main { overflow: hidden; }
 
 .hero,
@@ -766,11 +775,23 @@ footer {
   font-size: 0.78rem;
 }
 footer p { margin: 0; }
+footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+footer nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+footer nav a:hover { color: var(--red-dark); }
 
 .noscript { position: fixed; right: 1rem; bottom: 1rem; max-width: 420px; padding: 1rem; background: var(--red-dark); color: white; }
 
 @media (max-width: 900px) {
-  nav { display: none; }
+  /* scoped to the header: .mobile-nav carries these links below 900px, but the
+     footer link row is not duplicated anywhere and has to stay visible */
+  .site-header nav { display: none; }
   .mobile-nav { position: relative; display: block; }
   .mobile-nav summary { cursor: pointer; color: var(--muted); font-size: 0.78rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
   .mobile-nav > div {

@@ -14,10 +14,16 @@ provider-agnostic scorer judges the output. The headline metric is macro answer
 accuracy, answer accuracy averaged evenly across the benchmark's conflict
 categories.
 
+The results are also published as an interactive site at
+<https://engturtle.github.io/hermes-memconflict/>. The site has a benchmark
+report and a conversation browser for the MemConflict dialogues.
+
 ## Documentation
 
 | Document | What it covers |
 |---|---|
+| [Benchmark report](https://engturtle.github.io/hermes-memconflict/report/) | Interactive version of the benchmark matrix: providers, configurations, and results |
+| [Conversation browser](https://engturtle.github.io/hermes-memconflict/memconflict-sessions/) | MemConflict dialogues as chat transcripts, with conflict annotations and questions |
 | [docs/BENCHMARK_MATRIX.md](docs/BENCHMARK_MATRIX.md) | Providers, every configuration and feature flag, measured results |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Why the benchmark is built this way, including decisions that were reversed |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom, cause, fix, and what did not work |

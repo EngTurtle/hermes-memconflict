@@ -9,6 +9,10 @@ Contract versions: **v1** = `gemma-4-e2b`, **v3** = `qwen3.5-4b`
 `AxionML/Qwen3.5-4B-NVFP4`. The project abandoned v2 with zero personas banked.
 Entries tagged v1 describe the gemma era and may not apply to current serving.
 
+The published report at <https://engturtle.github.io/hermes-memconflict/report/>
+gives the results measured after these fixes. The repository README at
+<https://github.com/EngTurtle/hermes-memconflict> is the project entry point.
+
 ---
 
 ## Serving (vLLM)

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A detailed comparison of seven memory providers for Hermes, tested on 30 personas and 3,750 questions about changing, contradictory, and condition-bound memories.">
   <title>Hermes memory provider benchmark</title>
-  <link rel="stylesheet" href="assets/styles.css?v=20260806-9">
+  <link rel="stylesheet" href="assets/styles.css?v=20260807-1">
   <script src="assets/data.js?v=20260806-8" defer></script>
   <script src="assets/chart.umd.min.js?v=20260806-1" defer></script>
   <script src="assets/app.js?v=20260806-8" defer></script>
@@ -18,6 +18,10 @@
       <span class="wordmark-mark" aria-hidden="true">M/7</span>
       <span>Hermes memory benchmark</span>
     </a>
+    <nav class="site-links" aria-label="Related pages">
+      <a href="../">Site home</a>
+      <a href="../memconflict-sessions/">Conversation browser</a>
+    </nav>
     <nav aria-label="Report sections">
       <a href="#verdict">Findings</a>
       <a href="#primer">Terms</a>
@@ -32,6 +36,7 @@
     <details class="mobile-nav">
       <summary>Sections</summary>
       <div>
+        <a href="../">Site home</a><a href="../memconflict-sessions/">Conversation browser</a>
         <a href="#verdict">Findings</a><a href="#primer">Terms</a><a href="#results">Results</a><a href="#depth">History</a>
         <a href="#failures">Failures</a><a href="#providers">Providers</a><a href="#cost">Workload</a><a href="#method">Method</a><a href="#decision">Choose</a>
       </div>
@@ -411,8 +416,9 @@
 
       <div class="sources">
         <h3>Public source material</h3>
-        <p>The report does not link to the private benchmark repository. These links identify the public dataset, Hermes integration surface, and tested upstream projects.</p>
+        <p>The benchmark repository is public. These links identify the harness and results, the public dataset, the Hermes integration surface, and the tested upstream projects.</p>
         <ul>
+          <li><a href="https://github.com/EngTurtle/hermes-memconflict">Benchmark harness and results</a></li>
           <li><a href="https://github.com/TaoZhen1110/MemConflict">MemConflict benchmark and dataset</a></li>
           <li><a href="https://github.com/NousResearch/hermes-agent/tree/main/plugins/memory">Hermes memory plugins</a></li>
           <li><a href="https://github.com/plastic-labs/honcho">Honcho</a>, <a href="https://github.com/mem0ai/mem0">mem0</a>, <a href="https://github.com/supermemoryai/supermemory">Supermemory</a>, and <a href="https://github.com/vectorize-io/hindsight">Hindsight</a></li>
@@ -457,6 +463,15 @@
   <footer>
     <p><strong>Hermes memory provider benchmark</strong> · final August 2026 configuration set</p>
     <p>Data snapshot: August 2026.</p>
+    <nav aria-label="Site">
+      <a href="../">Site home</a>
+      <a href="../memconflict-sessions/">Conversation browser</a>
+      <a href="https://github.com/EngTurtle/hermes-memconflict/blob/main/docs/BENCHMARK_MATRIX.md">Benchmark matrix</a>
+      <a href="https://github.com/EngTurtle/hermes-memconflict/blob/main/docs/DECISIONS.md">Decisions</a>
+      <a href="https://github.com/EngTurtle/hermes-memconflict/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a>
+      <a href="https://github.com/EngTurtle/hermes-memconflict">Repository</a>
+      <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a>
+    </nav>
   </footer>
 
   <noscript><div class="noscript">Charts require JavaScript. Definitions, findings, examples, provider notes, and method remain readable without them.</div></noscript>
