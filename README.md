@@ -95,17 +95,11 @@ The run tag in each row is the on-disk identifier of that wave under
 `v5ftcall` row is a diagnostic that recalls every memory type. The graph below
 plots each provider's featured configuration and omits that diagnostic row.
 
-† The Honcho wave alone was judged at a 49,152-token input window, because its
-injected memory block runs about 25,000 tokens per question and overruns the
-default judge budget. Every other wave used a 32,768-token window. The judge
-model, sampling, and penalty rubric are otherwise identical
-([docs/DECISIONS.md](docs/DECISIONS.md), "The Honcho wave is judged at a wider
-window").
 
 ```mermaid
 xychart-beta
-    title "Contract v5 featured: macro answer accuracy (gemma-4-12b penalty rubric, wrong=-1)"
-    x-axis ["Honcho", "mem0", "Supermemory", "RetainDB server", "Hindsight", "OpenViking", "Mnemosyne"]
+    title "Contract v5 featured: macro answer accuracy"
+    x-axis ["Honcho", "mem0", "Supermemory", "RetainDB", "Hindsight", "OpenViking", "Mnemosyne"]
     y-axis "Macro answer accuracy" 0 --> 0.5
     bar [0.477, 0.392, 0.288, 0.270, 0.218, 0.132, 0.116]
 ```

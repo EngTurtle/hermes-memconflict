@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MemConflict &middot; Conversation Browser</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <div id="app" x-data="app()" x-cloak :class="{ 'details-open': showDetails }">
+
+    <!-- ================= Persona pane ================= -->
+    <aside class="pane pane-personas">
+      <div class="pane-header">
+        <h1 class="app-title">Personas</h1>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="Search name or seed&hellip;"
+          x-model="personaSearch"
+        />
+      </div>
+      <div class="pane-list" x-show="!personas.error">
+        <template x-for="p in filteredPersonas()" :key="p.idx">
+          <div
+            class="persona-row"
+            :class="{ active: currentPersona() && currentPersona().idx === p.idx }"
+            @click="selectPersona(p.idx)"
+          >
+            <div class="persona-name" x-text="p.name"></div>
+            <div class="persona-meta">
+              <span x-text="p.mbti"></span>
+              <span class="dot-sep">&middot;</span>
+              <span x-text="(p.sessions ? p.sessions.length : 0) + ' sessions'"></span>
+            </div>
+            <div class="persona-seed" x-text="p.persona_seed"></div>
+          </div>
+        </template>
+        <div class="empty-note" x-show="filteredPersonas().length === 0">
+          No personas match &ldquo;<span x-text="personaSearch"></span>&rdquo;
+        </div>
+      </div>
+      <div class="empty-note" x-show="personas.error" x-cloak>
+        Could not load data.js &mdash; window.MEMCONFLICT_DATA is missing.
+      </div>
+    </aside>
+
+    <!-- ================= Session pane ================= -->
+    <aside class="pane pane-sessions">
+      <div class="pane-header">
+        <h2 class="pane-title" x-text="currentPersona() ? currentPersona().name : 'Sessions'"></h2>
+        <div class="pane-subtitle" x-show="currentPersona()">
+          <span x-text="currentSessions().length + ' conversations'"></span>
+        </div>
+      </div>
+      <div class="pane-list">
+        <template x-for="(s, sIdx) in currentSessions()" :key="s.session_id">
+          <div
+            class="session-row"
+            :class="{ active: currentSessionIdx === sIdx }"
+            @click="selectSession(sIdx)"
+          >
+            <div class="session-row-top">
+              <span class="session-date" x-text="s.date"></span>
+              <span class="badge" :class="sessionTypeClass(s.session_type)" x-text="sessionTypeLabel(s.session_type)"></span>
+            </div>
+            <div class="session-row-mid">
+              <span class="msg-count" x-text="messageCount(s) + ' msgs'"></span>
+              <span class="conflict-dot" x-show="hasAnnotations(s)" title="Has conflicts/questions"></span>
+            </div>
+            <div class="session-outline" x-text="s.outline"></div>
+          </div>
+        </template>
+        <div class="empty-note" x-show="!currentPersona()">Select a persona</div>
+      </div>
+    </aside>
+
+    <!-- ================= Chat pane ================= -->
+    <main class="pane pane-chat">
+      <div class="chat-header">
+        <div class="chat-header-title">
+          <template x-if="currentSession()">
+            <span x-text="'Session ' + currentSession().session_id + ' &middot; ' + currentSession().date + ' &middot; ' + sessionTypeLabel(currentSession().session_type)"></span>
+          </template>
+          <template x-if="!currentSession()">
+            <span>No conversation selected</span>
+          </template>
+        </div>
+        <button class="details-toggle" @click="toggleDetails()" :class="{ active: showDetails }">
+          Details
+        </button>
+      </div>
+
+      <div class="chat-body">
+        <template x-if="!currentSession()">
+          <div class="chat-empty-state">
+            <div class="chat-empty-icon">&#128172;</div>
+            <div>Select a conversation</div>
+          </div>
+        </template>
+
+        <template x-if="currentSession()">
+          <div class="chat-transcript">
+            <template x-for="m in currentSession().messages" :key="m.turn + '-' + m.role + '-' + (m.content ? m.content.length : 0)">
+              <div class="msg-row" :class="m.role === 'user' ? 'msg-row-user' : 'msg-row-assistant'">
+                <div class="msg-role-label" x-text="m.role === 'user' ? 'You' : (m.role === 'assistant' ? 'Assistant' : m.role)"></div>
+                <div class="msg-bubble" :class="m.role === 'user' ? 'bubble-user' : (m.role === 'assistant' ? 'bubble-assistant' : 'bubble-unknown')">
+                  <span x-text="m.content ? m.content : '(no content)'" :class="{ 'msg-empty': !m.content }"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </main>
+
+    <!-- ================= Details aside ================= -->
+    <aside class="pane pane-details" x-show="showDetails" x-cloak>
+      <div class="details-header">
+        <div class="segmented">
+          <button
+            class="segmented-btn"
+            :class="{ active: detailsTab === 'profile' }"
+            @click="detailsTab = 'profile'"
+          >Profile</button>
+          <button
+            class="segmented-btn"
+            :class="{ active: detailsTab === 'session' }"
+            @click="detailsTab = 'session'"
+          >Session</button>
+        </div>
+        <button class="details-close" @click="toggleDetails()" title="Close details">&times;</button>
+      </div>
+
+      <div class="details-body">
+
+        <!-- ---------- Profile tab ---------- -->
+        <template x-if="detailsTab === 'profile' && currentPersona()">
+          <div class="details-profile">
+
+            <details open>
+              <summary>Fixed Profile</summary>
+              <div class="tree">
+                <template x-for="(row, i) in flattenObject(currentPersona().fixed_profile)" :key="i">
+                  <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                    <template x-if="row.isLeaf">
+                      <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                    </template>
+                    <template x-if="!row.isLeaf">
+                      <span class="tree-group-key" x-text="row.key"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </details>
+
+            <details>
+              <summary>Dynamic Profile</summary>
+              <div class="tree">
+                <template x-for="(row, i) in flattenObject(currentPersona().dynamic_profile)" :key="i">
+                  <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                    <template x-if="row.isLeaf">
+                      <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                    </template>
+                    <template x-if="!row.isLeaf">
+                      <span class="tree-group-key" x-text="row.key"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </details>
+
+            <details>
+              <summary>Preferences</summary>
+              <div class="tree">
+                <template x-for="(row, i) in flattenObject(currentPersona().preference_profile)" :key="i">
+                  <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                    <template x-if="row.isLeaf">
+                      <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                    </template>
+                    <template x-if="!row.isLeaf">
+                      <span class="tree-group-key" x-text="row.key"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </details>
+
+            <details>
+              <summary>Personality</summary>
+              <div class="personality-block">
+                <div class="tree-row tree-leaf">
+                  <span class="tree-key">MBTI</span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="currentPersona().personality ? currentPersona().personality.MBTI : ''"></span>
+                </div>
+                <div class="chip-row">
+                  <template x-for="(tag, i) in (currentPersona().personality ? currentPersona().personality.MBTI_Tags : [])" :key="i">
+                    <span class="chip" x-text="tag"></span>
+                  </template>
+                </div>
+              </div>
+            </details>
+
+            <details>
+              <summary>Life Goal</summary>
+              <div class="tree" x-show="currentPersona().life_goal">
+                <div class="tree-row tree-leaf">
+                  <span class="tree-key">Type</span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="currentPersona().life_goal ? currentPersona().life_goal.Type : ''"></span>
+                </div>
+                <div class="tree-row tree-leaf">
+                  <span class="tree-key">Description</span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="currentPersona().life_goal ? currentPersona().life_goal.Description : ''"></span>
+                </div>
+              </div>
+            </details>
+
+            <details>
+              <summary>Related People</summary>
+              <div class="tree">
+                <template x-for="(row, i) in flattenObject(currentPersona().others_profile)" :key="i">
+                  <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                    <template x-if="row.isLeaf">
+                      <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                    </template>
+                    <template x-if="!row.isLeaf">
+                      <span class="tree-group-key" x-text="row.key"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </details>
+
+          </div>
+        </template>
+
+        <template x-if="detailsTab === 'profile' && !currentPersona()">
+          <div class="empty-note">No persona selected</div>
+        </template>
+
+        <!-- ---------- Session tab ---------- -->
+        <template x-if="detailsTab === 'session' && currentSession()">
+          <div class="details-session">
+
+            <div class="session-outline-full" x-text="currentSession().outline"></div>
+
+            <div class="chip-row" x-show="currentSession().event_types && currentSession().event_types.length">
+              <template x-for="(et, i) in currentSession().event_types" :key="i">
+                <span class="chip chip-event" x-text="et"></span>
+              </template>
+            </div>
+
+            <div class="no-annotations" x-show="!hasAnnotations(currentSession())">
+              No conflict annotations for this session.
+            </div>
+
+            <div class="annotation-section" x-show="currentSession().static_conflicts && currentSession().static_conflicts.length">
+              <h3 class="section-label">Static Conflicts</h3>
+              <template x-for="(c, ci) in currentSession().static_conflicts" :key="ci">
+                <div class="annotation-card">
+                  <template x-for="(row, i) in flattenObject(c)" :key="i">
+                    <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                      <template x-if="row.isLeaf">
+                        <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                      </template>
+                      <template x-if="!row.isLeaf">
+                        <span class="tree-group-key" x-text="row.key"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <div class="annotation-section" x-show="currentSession().conditional_conflicts && currentSession().conditional_conflicts.length">
+              <h3 class="section-label">Conditional Conflicts</h3>
+              <template x-for="(c, ci) in currentSession().conditional_conflicts" :key="ci">
+                <div class="annotation-card">
+                  <template x-for="(row, i) in flattenObject(c)" :key="i">
+                    <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                      <template x-if="row.isLeaf">
+                        <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                      </template>
+                      <template x-if="!row.isLeaf">
+                        <span class="tree-group-key" x-text="row.key"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <div class="annotation-section" x-show="currentSession().others_dynamic && currentSession().others_dynamic.length">
+              <h3 class="section-label">Others Dynamic</h3>
+              <template x-for="(c, ci) in currentSession().others_dynamic" :key="ci">
+                <div class="annotation-card">
+                  <template x-for="(row, i) in flattenObject(c)" :key="i">
+                    <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                      <template x-if="row.isLeaf">
+                        <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                      </template>
+                      <template x-if="!row.isLeaf">
+                        <span class="tree-group-key" x-text="row.key"></span>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+
+            <div class="annotation-section" x-show="currentSession().revealed_attributes && Object.keys(currentSession().revealed_attributes).length">
+              <h3 class="section-label">Revealed Attributes</h3>
+              <div class="annotation-card">
+                <template x-for="(row, i) in flattenObject(currentSession().revealed_attributes)" :key="i">
+                  <div class="tree-row" :class="{ 'tree-leaf': row.isLeaf }" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                    <template x-if="row.isLeaf">
+                      <span><span class="tree-key" x-text="row.key"></span><span class="tree-sep"> &mdash; </span><span class="tree-val" x-text="row.value"></span></span>
+                    </template>
+                    <template x-if="!row.isLeaf">
+                      <span class="tree-group-key" x-text="row.key"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="annotation-section" x-show="currentSession().session_questions && currentSession().session_questions.length">
+              <h3 class="section-label">Benchmark Questions</h3>
+              <template x-for="(q, qi) in currentSession().session_questions" :key="qi">
+                <div class="question-card">
+                  <div class="question-text" x-text="q.question"></div>
+                  <div class="question-answer" x-text="q.answer"></div>
+                  <div class="question-badges">
+                    <span class="chip chip-badge" x-text="q.conflict_type"></span>
+                    <span class="chip chip-badge" :class="'diff-' + q.difficulty" x-text="q.difficulty"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+          </div>
+        </template>
+
+        <template x-if="detailsTab === 'session' && !currentSession()">
+          <div class="empty-note">Select a conversation to see its details</div>
+        </template>
+
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- data.js defines window.MEMCONFLICT_DATA. app.js must run BEFORE Alpine so
+       window.app / the alpine:init registration exist when Alpine auto-starts
+       (Alpine's CDN build starts as soon as it loads during the defer phase). -->
+  <script src="data.js"></script>
+  <script defer src="js/app.js"></script>
+  <script defer src="vendor/alpine.min.js"></script>
+</body>
+</html>
